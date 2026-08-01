@@ -11,6 +11,7 @@
   <a href="#read-chinese"><img alt="中文" src="https://img.shields.io/badge/中文-阅读中文版-18181B?style=for-the-badge"></a>
   <a href="#read-english"><img alt="English" src="https://img.shields.io/badge/English-Read_in_English-18181B?style=for-the-badge"></a>
   <a href="#current-build"><img alt="Current build" src="https://img.shields.io/badge/Current_build-Four_Profile_Matrix-D6A900?style=for-the-badge"></a>
+  <a href="#license"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-18181B?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -220,3 +221,15 @@ This public repository contains source code, tests, and documentation only. Char
 - [Four-profile matrix validation](docs/NON_VICON_MATRIX_V1.md)
 
 <p align="right"><a href="#top">Back to top ↑</a></p>
+
+---
+
+<a id="license" name="license"></a>
+
+## License / 许可证
+
+SKRTG Engine 的自有源码以 [MIT License](LICENSE) 发布。仓库内随附的第三方组件继续适用各自的许可证，详见 [Third-Party Notices](native_viewer/THIRD_PARTY_NOTICES.md)。
+
+Original SKRTG Engine source code is released under the [MIT License](LICENSE). Bundled third-party components remain under their respective licenses; see [Third-Party Notices](native_viewer/THIRD_PARTY_NOTICES.md).
+
+<p align="right"><a href="#top">Back to top / 返回顶部 ↑</a></p>
