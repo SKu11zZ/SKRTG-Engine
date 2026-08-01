@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -33,8 +34,12 @@ constexpr const char* ExternalRequestSchema =
     "skrtg.native_viewer.batch_retarget_request.v1";
 constexpr const char* UEIKJsonRequestSchema =
     "skrtg.native_viewer.batch_retarget_request.v2";
-constexpr const char* StatusSchema =
+constexpr const char* ProfileCatalogRequestSchema =
+    "skrtg.native_viewer.batch_retarget_request.v3";
+constexpr const char* LegacyStatusSchema =
     "skrtg.native_viewer.batch_retarget_status.v1";
+constexpr const char* ProfileCatalogStatusSchema =
+    "skrtg.native_viewer.batch_retarget_status.v2";
 constexpr const char* ExternalDefinitionKind = "external_foundation_v1";
 constexpr const char* UEIKJsonDefinitionKind = "ue_ik_json_v1";
 constexpr std::size_t MaximumPlannedFiles = 100000;
@@ -72,6 +77,17 @@ bool HasFbxExtension(const std::filesystem::path& Path)
 bool HasJsonExtension(const std::filesystem::path& Path)
 {
     return LowerAscii(Path.extension().string()) == ".json";
+}
+
+bool IsSha256(const std::string& Value)
+{
+    return Value.size() == 64 &&
+        std::all_of(
+            Value.begin(), Value.end(),
+            [](const unsigned char Character)
+            {
+                return std::isxdigit(Character) != 0;
+            });
 }
 
 std::filesystem::path NormalizedAbsolute(
@@ -355,6 +371,146 @@ BatchCharacterInput ReadCharacterJson(const nlohmann::json& Json)
     return Result;
 }
 
+nlohmann::json ProfileCatalogBindingJson(
+    const RetargetBridgeAssetBinding& Binding)
+{
+    return {
+        {"catalogFile", PathToUtf8(Binding.CatalogFile)},
+        {"catalogSha256", Binding.CatalogSha256},
+        {"catalogId", Binding.CatalogId},
+        {"sourceSkeletonId", Binding.SourceSkeletonId},
+        {"targetSkeletonId", Binding.TargetSkeletonId},
+        {"characterProfiles", {
+            {"source", {
+                {"packageFile",
+                 PathToUtf8(Binding.SourceProfilePackage)},
+                {"packageSha256",
+                 Binding.SourceProfilePackageSha256},
+                {"profileVersion",
+                 Binding.SourceProfileVersion}}},
+            {"target", {
+                {"packageFile",
+                 PathToUtf8(Binding.TargetProfilePackage)},
+                {"packageSha256",
+                 Binding.TargetProfilePackageSha256},
+                {"profileVersion",
+                 Binding.TargetProfileVersion}}}}},
+        {"expectedSha256", {
+            {"sourceRest", Binding.SourceRestSha256},
+            {"targetRest", Binding.TargetRestSha256},
+            {"sourceRigJson", Binding.SourceRigJsonSha256},
+            {"targetRigJson", Binding.TargetRigJsonSha256},
+            {"sourceAlignmentRetargeterJson",
+             Binding.SourceAlignmentRetargeterJsonSha256},
+            {"targetAlignmentRetargeterJson",
+             Binding.TargetAlignmentRetargeterJsonSha256}}}};
+}
+
+RetargetBridgeAssetBinding ReadProfileCatalogBindingJson(
+    const nlohmann::json& Json)
+{
+    RetargetBridgeAssetBinding Result;
+    Result.Required = true;
+    Result.CatalogFile = PathFromUtf8(
+        Json.at("catalogFile").get<std::string>());
+    Result.CatalogSha256 =
+        Json.at("catalogSha256").get<std::string>();
+    Result.CatalogId = Json.at("catalogId").get<std::string>();
+    Result.SourceSkeletonId =
+        Json.at("sourceSkeletonId").get<std::string>();
+    Result.TargetSkeletonId =
+        Json.at("targetSkeletonId").get<std::string>();
+    const nlohmann::json& Profiles =
+        Json.at("characterProfiles");
+    const nlohmann::json& Source = Profiles.at("source");
+    const nlohmann::json& Target = Profiles.at("target");
+    Result.SourceProfilePackage = PathFromUtf8(
+        Source.at("packageFile").get<std::string>());
+    Result.SourceProfilePackageSha256 =
+        Source.at("packageSha256").get<std::string>();
+    Result.SourceProfileVersion =
+        Source.at("profileVersion").get<std::string>();
+    Result.TargetProfilePackage = PathFromUtf8(
+        Target.at("packageFile").get<std::string>());
+    Result.TargetProfilePackageSha256 =
+        Target.at("packageSha256").get<std::string>();
+    Result.TargetProfileVersion =
+        Target.at("profileVersion").get<std::string>();
+    const nlohmann::json& Expected = Json.at("expectedSha256");
+    Result.SourceRestSha256 =
+        Expected.at("sourceRest").get<std::string>();
+    Result.TargetRestSha256 =
+        Expected.at("targetRest").get<std::string>();
+    Result.SourceRigJsonSha256 =
+        Expected.at("sourceRigJson").get<std::string>();
+    Result.TargetRigJsonSha256 =
+        Expected.at("targetRigJson").get<std::string>();
+    Result.SourceAlignmentRetargeterJsonSha256 =
+        Expected.at("sourceAlignmentRetargeterJson")
+            .get<std::string>();
+    Result.TargetAlignmentRetargeterJsonSha256 =
+        Expected.at("targetAlignmentRetargeterJson")
+            .get<std::string>();
+    return Result;
+}
+
+nlohmann::json CatalogAnimationJson(
+    const BatchCatalogAnimationInput& Animation)
+{
+    return {
+        {"animationId", Animation.AnimationId},
+        {"label", Animation.Label},
+        {"sourceSkeletonId", Animation.SourceSkeletonId},
+        {"sourceAnimationFbx",
+         PathToUtf8(Animation.SourceAnimationFbx)},
+        {"sourceAnimationSha256",
+         Animation.SourceAnimationSha256},
+        {"sourceAnimationGoldenJson",
+         PathToUtf8(Animation.SourceAnimationGoldenJson)},
+        {"sourceAnimationGoldenJsonSha256",
+         Animation.SourceAnimationGoldenJsonSha256},
+        {"animationStack", Animation.AnimationStack},
+        {"sourceFbxImportMode",
+         RetargetBridgeSourceFbxImportModeName(
+             Animation.SourceFbxImportMode)},
+        {"restFbxImportMode",
+         RetargetBridgeRestFbxImportModeName(
+             Animation.RestFbxImportMode)}};
+}
+
+BatchCatalogAnimationInput ReadCatalogAnimationJson(
+    const nlohmann::json& Json)
+{
+    BatchCatalogAnimationInput Result;
+    Result.AnimationId =
+        Json.at("animationId").get<std::string>();
+    Result.Label = Json.at("label").get<std::string>();
+    Result.SourceSkeletonId =
+        Json.at("sourceSkeletonId").get<std::string>();
+    Result.SourceAnimationFbx = PathFromUtf8(
+        Json.at("sourceAnimationFbx").get<std::string>());
+    Result.SourceAnimationSha256 =
+        Json.at("sourceAnimationSha256").get<std::string>();
+    Result.SourceAnimationGoldenJson = PathFromUtf8(
+        Json.at("sourceAnimationGoldenJson").get<std::string>());
+    Result.SourceAnimationGoldenJsonSha256 =
+        Json.at("sourceAnimationGoldenJsonSha256")
+            .get<std::string>();
+    Result.AnimationStack =
+        Json.value("animationStack", std::string());
+    if (!ParseRetargetBridgeSourceFbxImportMode(
+            Json.at("sourceFbxImportMode").get<std::string>(),
+            Result.SourceFbxImportMode) ||
+        !ParseRetargetBridgeRestFbxImportMode(
+            Json.at("restFbxImportMode").get<std::string>(),
+            Result.RestFbxImportMode))
+    {
+        throw std::runtime_error(
+            "unsupported profile batch FBX import mode");
+    }
+    return Result;
+}
+
 nlohmann::json ToolsJson(const RetargetBridgeTools& Tools)
 {
     nlohmann::json Json = {
@@ -395,9 +551,11 @@ RetargetBridgeTools ReadToolsJson(const nlohmann::json& Json)
     return Result;
 }
 
-nlohmann::json JobJson(const BatchRetargetJob& Job)
+nlohmann::json JobJson(
+    const BatchRetargetJob& Job,
+    const bool IncludeProfileCatalogFields)
 {
-    return {
+    nlohmann::json Json = {
         {"index", Job.Index},
         {"sourceAnimationFbx", PathToUtf8(Job.SourceAnimationFbx)},
         {"relativeAnimationPath", PathToUtf8(Job.RelativeAnimationPath)},
@@ -411,6 +569,24 @@ nlohmann::json JobJson(const BatchRetargetJob& Job)
         {"state", BatchRetargetJobStateName(Job.State)},
         {"durationSeconds", Job.DurationSeconds},
         {"errors", Job.Errors}};
+    if (IncludeProfileCatalogFields)
+    {
+        Json["sourceAnimationId"] = Job.SourceAnimationId;
+        Json["sourceAnimationSkeletonId"] =
+            Job.SourceAnimationSkeletonId;
+        Json["sourceAnimationGoldenJson"] =
+            PathToUtf8(Job.SourceAnimationGoldenJson);
+        Json["sourceAnimationGoldenJsonSha256"] =
+            Job.SourceAnimationGoldenJsonSha256;
+        Json["animationStack"] = Job.AnimationStack;
+        Json["sourceFbxImportMode"] =
+            RetargetBridgeSourceFbxImportModeName(
+                Job.SourceFbxImportMode);
+        Json["restFbxImportMode"] =
+            RetargetBridgeRestFbxImportModeName(
+                Job.RestFbxImportMode);
+    }
+    return Json;
 }
 
 BatchRetargetJobState ParseJobState(const std::string& Text)
@@ -421,7 +597,9 @@ BatchRetargetJobState ParseJobState(const std::string& Text)
     return BatchRetargetJobState::Pending;
 }
 
-BatchRetargetJob ReadJobJson(const nlohmann::json& Json)
+BatchRetargetJob ReadJobJson(
+    const nlohmann::json& Json,
+    const bool RequireProfileCatalogFields)
 {
     BatchRetargetJob Result;
     Result.Index = Json.at("index").get<std::size_t>();
@@ -437,8 +615,53 @@ BatchRetargetJob ReadJobJson(const nlohmann::json& Json)
         Json.at("finalFbx").get<std::string>());
     Result.ClipId = Json.at("clipId").get<std::string>();
     Result.ClipLabel = Json.at("clipLabel").get<std::string>();
+    Result.SourceAnimationId = RequireProfileCatalogFields
+        ? Json.at("sourceAnimationId").get<std::string>()
+        : Json.value("sourceAnimationId", std::string());
+    Result.SourceAnimationSkeletonId = RequireProfileCatalogFields
+        ? Json.at("sourceAnimationSkeletonId").get<std::string>()
+        : Json.value("sourceAnimationSkeletonId", std::string());
     Result.SourceAnimationSha256 =
         Json.value("sourceAnimationSha256", std::string());
+    Result.SourceAnimationGoldenJson = PathFromUtf8(
+        RequireProfileCatalogFields
+            ? Json.at("sourceAnimationGoldenJson")
+                  .get<std::string>()
+            : Json.value(
+                  "sourceAnimationGoldenJson", std::string()));
+    Result.SourceAnimationGoldenJsonSha256 =
+        RequireProfileCatalogFields
+            ? Json.at("sourceAnimationGoldenJsonSha256")
+                  .get<std::string>()
+            : Json.value(
+                  "sourceAnimationGoldenJsonSha256",
+                  std::string());
+    Result.AnimationStack = RequireProfileCatalogFields
+        ? Json.at("animationStack").get<std::string>()
+        : Json.value("animationStack", std::string());
+    if ((RequireProfileCatalogFields ||
+         Json.contains("sourceFbxImportMode")) &&
+        (!ParseRetargetBridgeSourceFbxImportMode(
+             Json.at("sourceFbxImportMode").get<std::string>(),
+             Result.SourceFbxImportMode) ||
+         !ParseRetargetBridgeRestFbxImportMode(
+             Json.at("restFbxImportMode").get<std::string>(),
+             Result.RestFbxImportMode)))
+    {
+        throw std::runtime_error(
+            "unsupported batch status FBX import mode");
+    }
+    if (RequireProfileCatalogFields &&
+        (Result.SourceAnimationId.empty() ||
+         Result.SourceAnimationSkeletonId.empty() ||
+         !IsSha256(Result.SourceAnimationSha256) ||
+         Result.SourceAnimationGoldenJson.empty() ||
+         !IsSha256(Result.SourceAnimationGoldenJsonSha256)))
+    {
+        throw std::runtime_error(
+            "profile-backed batch status has incomplete per-animation "
+            "provenance");
+    }
     Result.FinalFbxSha256 =
         Json.value("finalFbxSha256", std::string());
     Result.State = ParseJobState(Json.at("state").get<std::string>());
@@ -455,6 +678,59 @@ std::string IndexedJobDirectoryName(
     Stream << std::setfill('0') << std::setw(6) << (Index + 1) << '_'
            << ClipId;
     return Stream.str();
+}
+
+RetargetBridgeRequest BuildBridgeRequestForJob(
+    const BatchRetargetRequest& Request,
+    const BatchRetargetJob& Job)
+{
+    RetargetBridgeRequest Result;
+    const bool UEIKJson =
+        Request.SourceCharacter.DefinitionKind ==
+            UEIKJsonDefinitionKind;
+    Result.RouteKind = UEIKJson
+        ? RetargetBridgeRouteKind::UEIKJsonV1
+        : RetargetBridgeRouteKind::ExternalFoundationV1;
+    Result.SourceAnimationFbx = Job.SourceAnimationFbx;
+    Result.TargetSkeletonFbx =
+        Request.TargetCharacter.RestFbx;
+    Result.SourceRestFbx = Request.SourceCharacter.RestFbx;
+    Result.OutputDirectory = Job.JobDirectory;
+    Result.Tools = Request.Tools;
+    Result.ClipId = Job.ClipId;
+    Result.ClipLabel = Job.ClipLabel;
+    Result.AnimationStack = Request.AssetBinding.Required
+        ? Job.AnimationStack
+        : Request.AnimationStack;
+    Result.SourceRigJson =
+        Request.SourceCharacter.DefinitionFile;
+    Result.TargetRigJson =
+        Request.TargetCharacter.DefinitionFile;
+    Result.SourceAlignmentRetargeterJson =
+        Request.SourceCharacter.AlignmentRetargeterFile;
+    Result.TargetAlignmentRetargeterJson =
+        Request.TargetCharacter.AlignmentRetargeterFile;
+    Result.EnableSpinePelvisFollow =
+        Request.EnableSpinePelvisFollow;
+    Result.EnableSourceMotionFootLock =
+        Request.EnableSourceMotionFootLock;
+    if (Request.AssetBinding.Required)
+    {
+        Result.SourceAnimationGoldenJson =
+            Job.SourceAnimationGoldenJson;
+        Result.SourceFbxImportMode = Job.SourceFbxImportMode;
+        Result.RestFbxImportMode = Job.RestFbxImportMode;
+        Result.AssetBinding = Request.AssetBinding;
+        Result.AssetBinding.SourceAnimationId =
+            Job.SourceAnimationId;
+        Result.AssetBinding.SourceAnimationSkeletonId =
+            Job.SourceAnimationSkeletonId;
+        Result.AssetBinding.SourceAnimationSha256 =
+            Job.SourceAnimationSha256;
+        Result.AssetBinding.SourceAnimationGoldenJsonSha256 =
+            Job.SourceAnimationGoldenJsonSha256;
+    }
+    return Result;
 }
 
 void AddScanEntry(
@@ -603,6 +879,8 @@ BatchRetargetPlan BuildBatchRetargetPlan(
     const BatchRetargetRequest& Request)
 {
     BatchRetargetPlan Result;
+    const bool ProfileCatalogBatch =
+        Request.AssetBinding.Required;
     if (!IsRegularFile(Request.SourceCharacter.RestFbx) ||
         !HasFbxExtension(Request.SourceCharacter.RestFbx))
     {
@@ -625,6 +903,11 @@ BatchRetargetPlan BuildBatchRetargetPlan(
             "source and target character definitions must select the "
             "same supported route: external_foundation_v1 or "
             "ue_ik_json_v1");
+    }
+    else if (ProfileCatalogBatch && !UEIKJsonRoute)
+    {
+        Result.Errors.push_back(
+            "profile-backed batch v3 requires the UE IK JSON route");
     }
     else if (ExternalRoute &&
              (!Request.SourceCharacter.DefinitionFile.empty() ||
@@ -657,36 +940,80 @@ BatchRetargetPlan BuildBatchRetargetPlan(
             }
         }
     }
-    if (!IsDirectory(Request.AnimationDirectory))
-        Result.Errors.push_back("animation input folder is not readable");
+    if (ProfileCatalogBatch)
+    {
+        if (Request.AssetBinding.SourceProfilePackage.empty() ||
+            Request.AssetBinding.TargetProfilePackage.empty())
+        {
+            Result.Errors.push_back(
+                "profile-backed batch requires source and target "
+                ".skrtgprofile package bindings");
+        }
+        if (Request.CatalogAnimations.empty())
+        {
+            Result.Errors.push_back(
+                "profile-backed batch has no selected catalog animations");
+        }
+        else if (Request.CatalogAnimations.size() >
+                 MaximumPlannedFiles)
+        {
+            Result.Errors.push_back(
+                "profile-backed batch exceeds the 100000-animation "
+                "safety limit");
+        }
+        if (!Request.AnimationDirectory.empty())
+        {
+            Result.Errors.push_back(
+                "profile-backed batch does not accept an arbitrary "
+                "animation input folder");
+        }
+        if (Request.Recursive)
+        {
+            Result.Errors.push_back(
+                "profile-backed batch does not accept recursive folder "
+                "semantics");
+        }
+    }
+    else if (!IsDirectory(Request.AnimationDirectory))
+    {
+        Result.Errors.push_back(
+            "animation input folder is not readable");
+    }
     if (Request.OutputDirectory.empty())
         Result.Errors.push_back("batch output directory is empty");
     else if (!DirectoryEmptyOrAbsent(Request.OutputDirectory))
         Result.Errors.push_back(
             "batch output directory must be absent or empty (fail-closed overwrite policy)");
-    bool OutputInInputResolved = true;
-    bool InputInOutputResolved = true;
-    const bool OutputInInput =
-        !Request.AnimationDirectory.empty() &&
-        !Request.OutputDirectory.empty() &&
-        IsPathInsideOrEqual(
-            Request.OutputDirectory, Request.AnimationDirectory,
-            OutputInInputResolved);
-    const bool InputInOutput =
-        !Request.AnimationDirectory.empty() &&
-        !Request.OutputDirectory.empty() &&
-        IsPathInsideOrEqual(
-            Request.AnimationDirectory, Request.OutputDirectory,
-            InputInOutputResolved);
-    if (!OutputInInputResolved || !InputInOutputResolved)
+    if (!ProfileCatalogBatch)
     {
-        Result.Errors.push_back(
-            "animation input and batch output paths could not be securely resolved");
-    }
-    else if (OutputInInput || InputInOutput)
-    {
-        Result.Errors.push_back(
-            "animation input and batch output directories may not overlap");
+        bool OutputInInputResolved = true;
+        bool InputInOutputResolved = true;
+        const bool OutputInInput =
+            !Request.AnimationDirectory.empty() &&
+            !Request.OutputDirectory.empty() &&
+            IsPathInsideOrEqual(
+                Request.OutputDirectory,
+                Request.AnimationDirectory,
+                OutputInInputResolved);
+        const bool InputInOutput =
+            !Request.AnimationDirectory.empty() &&
+            !Request.OutputDirectory.empty() &&
+            IsPathInsideOrEqual(
+                Request.AnimationDirectory,
+                Request.OutputDirectory,
+                InputInOutputResolved);
+        if (!OutputInInputResolved || !InputInOutputResolved)
+        {
+            Result.Errors.push_back(
+                "animation input and batch output paths could not be "
+                "securely resolved");
+        }
+        else if (OutputInInput || InputInOutput)
+        {
+            Result.Errors.push_back(
+                "animation input and batch output directories may not "
+                "overlap");
+        }
     }
     if (UEIKJsonRoute &&
         (Request.EnableSpinePelvisFollow ||
@@ -704,78 +1031,143 @@ BatchRetargetPlan BuildBatchRetargetPlan(
     }
     if (!Result.Errors.empty()) return Result;
 
-    const std::vector<std::filesystem::path> Files =
-        ScanAnimationFiles(Request, Result.Errors, Result.Warnings);
-    if (!Result.Errors.empty()) return Result;
-    if (Files.empty())
-    {
-        Result.Errors.push_back("animation input folder contains no .fbx files");
-        return Result;
-    }
-
     std::set<std::string> PlannedFinalPaths;
-    Result.Jobs.reserve(Files.size());
-    for (std::size_t Index = 0; Index < Files.size(); ++Index)
+    if (ProfileCatalogBatch)
     {
-        BatchRetargetJob Job;
-        Job.Index = Index;
-        Job.SourceAnimationFbx = Files[Index];
-        std::error_code RelativeError;
-        Job.RelativeAnimationPath = std::filesystem::relative(
-            Files[Index], Request.AnimationDirectory, RelativeError);
-        if (RelativeError || Job.RelativeAnimationPath.empty())
+        std::set<std::string> AnimationIds;
+        Result.Jobs.reserve(Request.CatalogAnimations.size());
+        for (std::size_t Index = 0;
+             Index < Request.CatalogAnimations.size(); ++Index)
+        {
+            const BatchCatalogAnimationInput& Animation =
+                Request.CatalogAnimations[Index];
+            BatchRetargetJob Job;
+            Job.Index = Index;
+            Job.SourceAnimationFbx =
+                Animation.SourceAnimationFbx;
+            Job.RelativeAnimationPath =
+                PathFromUtf8(Animation.AnimationId + ".fbx");
+            Job.ClipId = Animation.AnimationId;
+            Job.ClipLabel = Animation.Label;
+            Job.SourceAnimationId = Animation.AnimationId;
+            Job.SourceAnimationSkeletonId =
+                Animation.SourceSkeletonId;
+            Job.SourceAnimationSha256 =
+                Animation.SourceAnimationSha256;
+            Job.SourceAnimationGoldenJson =
+                Animation.SourceAnimationGoldenJson;
+            Job.SourceAnimationGoldenJsonSha256 =
+                Animation.SourceAnimationGoldenJsonSha256;
+            Job.AnimationStack = Animation.AnimationStack;
+            Job.SourceFbxImportMode =
+                Animation.SourceFbxImportMode;
+            Job.RestFbxImportMode =
+                Animation.RestFbxImportMode;
+            Job.JobDirectory = Request.OutputDirectory / "Jobs" /
+                IndexedJobDirectoryName(Index, Job.ClipId);
+            Job.ReviewPackage =
+                Job.JobDirectory / "review.skrv";
+            Job.FinalFbx =
+                Request.OutputDirectory / "FinalFBX" /
+                (Animation.AnimationId + "__SKRTG_Final.fbx");
+            if (!AnimationIds.insert(Animation.AnimationId).second)
+            {
+                Result.Errors.push_back(
+                    "profile-backed batch contains duplicate animation "
+                    "ID: " + Animation.AnimationId);
+            }
+            if (!PlannedFinalPaths.insert(
+                    ComparablePath(Job.FinalFbx)).second)
+            {
+                Result.Errors.push_back(
+                    "multiple catalog animations map to the same Final "
+                    "FBX path: " + PathToUtf8(Job.FinalFbx));
+            }
+            Result.Jobs.push_back(std::move(Job));
+        }
+    }
+    else
+    {
+        const std::vector<std::filesystem::path> Files =
+            ScanAnimationFiles(
+                Request, Result.Errors, Result.Warnings);
+        if (!Result.Errors.empty()) return Result;
+        if (Files.empty())
         {
             Result.Errors.push_back(
-                "failed to make animation path relative to the selected folder: " +
-                PathToUtf8(Files[Index]));
-            continue;
+                "animation input folder contains no .fbx files");
+            return Result;
         }
-        Job.ClipId = MakeBridgeClipId(Files[Index]);
-        Job.ClipLabel = PathToUtf8(Files[Index].stem());
-        Job.JobDirectory = Request.OutputDirectory / "Jobs" /
-            IndexedJobDirectoryName(Index, Job.ClipId);
-        Job.ReviewPackage = Job.JobDirectory / "review.skrv";
-        Job.FinalFbx = Request.OutputDirectory / "FinalFBX" /
-            Job.RelativeAnimationPath.parent_path() /
-            (PathToUtf8(Files[Index].stem()) + "__SKRTG_Final.fbx");
-        if (!PlannedFinalPaths.insert(ComparablePath(Job.FinalFbx)).second)
+        Result.Jobs.reserve(Files.size());
+        for (std::size_t Index = 0; Index < Files.size(); ++Index)
         {
-            Result.Errors.push_back(
-                "multiple source animations map to the same Final FBX path: " +
-                PathToUtf8(Job.FinalFbx));
+            BatchRetargetJob Job;
+            Job.Index = Index;
+            Job.SourceAnimationFbx = Files[Index];
+            std::error_code RelativeError;
+            Job.RelativeAnimationPath = std::filesystem::relative(
+                Files[Index], Request.AnimationDirectory,
+                RelativeError);
+            if (RelativeError ||
+                Job.RelativeAnimationPath.empty())
+            {
+                Result.Errors.push_back(
+                    "failed to make animation path relative to the "
+                    "selected folder: " +
+                    PathToUtf8(Files[Index]));
+                continue;
+            }
+            Job.ClipId = MakeBridgeClipId(Files[Index]);
+            Job.ClipLabel = PathToUtf8(Files[Index].stem());
+            Job.JobDirectory =
+                Request.OutputDirectory / "Jobs" /
+                IndexedJobDirectoryName(Index, Job.ClipId);
+            Job.ReviewPackage =
+                Job.JobDirectory / "review.skrv";
+            Job.FinalFbx =
+                Request.OutputDirectory / "FinalFBX" /
+                Job.RelativeAnimationPath.parent_path() /
+                (PathToUtf8(Files[Index].stem()) +
+                 "__SKRTG_Final.fbx");
+            if (!PlannedFinalPaths.insert(
+                    ComparablePath(Job.FinalFbx)).second)
+            {
+                Result.Errors.push_back(
+                    "multiple source animations map to the same Final "
+                    "FBX path: " + PathToUtf8(Job.FinalFbx));
+            }
+            Result.Jobs.push_back(std::move(Job));
         }
-        Result.Jobs.push_back(std::move(Job));
     }
     if (!Result.Errors.empty()) return Result;
 
-    RetargetBridgeRequest First;
-    First.RouteKind = UEIKJsonRoute
-        ? RetargetBridgeRouteKind::UEIKJsonV1
-        : RetargetBridgeRouteKind::ExternalFoundationV1;
-    First.SourceAnimationFbx = Result.Jobs.front().SourceAnimationFbx;
-    First.SourceRestFbx = Request.SourceCharacter.RestFbx;
-    First.TargetSkeletonFbx = Request.TargetCharacter.RestFbx;
-    First.OutputDirectory = Result.Jobs.front().JobDirectory;
-    First.Tools = Request.Tools;
-    First.ClipId = Result.Jobs.front().ClipId;
-    First.ClipLabel = Result.Jobs.front().ClipLabel;
-    First.AnimationStack = Request.AnimationStack;
-    First.SourceRigJson = Request.SourceCharacter.DefinitionFile;
-    First.TargetRigJson = Request.TargetCharacter.DefinitionFile;
-    First.SourceAlignmentRetargeterJson =
-        Request.SourceCharacter.AlignmentRetargeterFile;
-    First.TargetAlignmentRetargeterJson =
-        Request.TargetCharacter.AlignmentRetargeterFile;
-    First.EnableSpinePelvisFollow = Request.EnableSpinePelvisFollow;
-    First.EnableSourceMotionFootLock = Request.EnableSourceMotionFootLock;
-    const RetargetBridgePreflight Foundation =
-        PreflightRetargetBridge(First);
-    Result.Errors.insert(
-        Result.Errors.end(), Foundation.Errors.begin(),
-        Foundation.Errors.end());
-    Result.Warnings.insert(
-        Result.Warnings.end(), Foundation.Warnings.begin(),
-        Foundation.Warnings.end());
+    const std::size_t PreflightCount = ProfileCatalogBatch
+        ? Result.Jobs.size()
+        : std::size_t{1};
+    for (std::size_t Index = 0;
+         Index < PreflightCount; ++Index)
+    {
+        const RetargetBridgePreflight Preflight =
+            PreflightRetargetBridge(
+                BuildBridgeRequestForJob(
+                    Request, Result.Jobs[Index]));
+        for (const std::string& Error : Preflight.Errors)
+        {
+            Result.Errors.push_back(
+                ProfileCatalogBatch
+                    ? (Result.Jobs[Index].SourceAnimationId +
+                       ": " + Error)
+                    : Error);
+        }
+        for (const std::string& Warning : Preflight.Warnings)
+        {
+            Result.Warnings.push_back(
+                ProfileCatalogBatch
+                    ? (Result.Jobs[Index].SourceAnimationId +
+                       ": " + Warning)
+                    : Warning);
+        }
+    }
     Result.Warnings.push_back(
         "low-memory streaming policy is fixed at one active animation; "
         "each Retargeter worker exits before the next job starts");
@@ -790,15 +1182,21 @@ bool WriteBatchRetargetRequest(
 {
     const bool UEIKJson =
         Request.SourceCharacter.DefinitionKind == UEIKJsonDefinitionKind;
-    const nlohmann::json Json = {
-        {"schema", UEIKJson
-            ? UEIKJsonRequestSchema
-            : ExternalRequestSchema},
+    const bool ProfileCatalogBatch =
+        Request.AssetBinding.Required;
+    nlohmann::json Json = {
+        {"schema", ProfileCatalogBatch
+            ? ProfileCatalogRequestSchema
+            : (UEIKJson
+                ? UEIKJsonRequestSchema
+                : ExternalRequestSchema)},
         {"sourceCharacter", CharacterJson(Request.SourceCharacter)},
         {"targetCharacter", CharacterJson(Request.TargetCharacter)},
         {"animationDirectory", PathToUtf8(Request.AnimationDirectory)},
         {"outputDirectory", PathToUtf8(Request.OutputDirectory)},
-        {"recursive", Request.Recursive},
+        {"recursive", ProfileCatalogBatch
+            ? false
+            : Request.Recursive},
         {"animationStack", Request.AnimationStack},
         {"enableSpinePelvisFollow", Request.EnableSpinePelvisFollow},
         {"enableSourceMotionFootLock", Request.EnableSourceMotionFootLock},
@@ -807,6 +1205,19 @@ bool WriteBatchRetargetRequest(
             {"mode", "streaming_one_animation_per_worker"},
             {"continueAfterJobFailure", true}}},
         {"tools", ToolsJson(Request.Tools)}};
+    if (ProfileCatalogBatch)
+    {
+        Json["assetSelection"] =
+            ProfileCatalogBindingJson(Request.AssetBinding);
+        nlohmann::json Animations = nlohmann::json::array();
+        for (const BatchCatalogAnimationInput& Animation :
+             Request.CatalogAnimations)
+        {
+            Animations.push_back(
+                CatalogAnimationJson(Animation));
+        }
+        Json["animations"] = std::move(Animations);
+    }
     return WriteTextAtomic(OutputJson, Json.dump(2) + "\n", OutError);
 }
 
@@ -828,7 +1239,8 @@ bool ReadBatchRetargetRequest(
         const std::string Schema =
             Json.at("schema").get<std::string>();
         if (Schema != ExternalRequestSchema &&
-            Schema != UEIKJsonRequestSchema)
+            Schema != UEIKJsonRequestSchema &&
+            Schema != ProfileCatalogRequestSchema)
         {
             OutError = "unsupported batch retarget request schema";
             return false;
@@ -843,6 +1255,7 @@ bool ReadBatchRetargetRequest(
                 "batch request violates the fixed serial execution policy";
             return false;
         }
+        OutRequest = {};
         OutRequest.SourceCharacter =
             ReadCharacterJson(Json.at("sourceCharacter"));
         OutRequest.TargetCharacter =
@@ -859,6 +1272,35 @@ bool ReadBatchRetargetRequest(
         OutRequest.EnableSourceMotionFootLock =
             Json.at("enableSourceMotionFootLock").get<bool>();
         OutRequest.Tools = ReadToolsJson(Json.at("tools"));
+        if (Schema == ProfileCatalogRequestSchema)
+        {
+            OutRequest.AssetBinding =
+                ReadProfileCatalogBindingJson(
+                    Json.at("assetSelection"));
+            const nlohmann::json& Animations =
+                Json.at("animations");
+            if (!Animations.is_array() ||
+                Animations.size() > MaximumPlannedFiles)
+            {
+                OutError =
+                    "profile-backed batch animation inventory exceeds "
+                    "the fixed safety contract";
+                return false;
+            }
+            for (const nlohmann::json& Animation : Animations)
+            {
+                OutRequest.CatalogAnimations.push_back(
+                    ReadCatalogAnimationJson(Animation));
+            }
+            if (!OutRequest.AnimationDirectory.empty() ||
+                OutRequest.Recursive)
+            {
+                OutError =
+                    "profile-backed batch v3 must not scan an "
+                    "animation directory";
+                return false;
+            }
+        }
         return true;
     }
     catch (const std::exception& Error)
@@ -876,9 +1318,14 @@ bool WriteBatchRetargetStatus(
 {
     nlohmann::json Jobs = nlohmann::json::array();
     for (const BatchRetargetJob& Job : Status.Jobs)
-        Jobs.push_back(JobJson(Job));
-    const nlohmann::json Json = {
-        {"schema", StatusSchema},
+    {
+        Jobs.push_back(
+            JobJson(Job, Status.AssetBinding.Required));
+    }
+    nlohmann::json Json = {
+        {"schema", Status.AssetBinding.Required
+            ? ProfileCatalogStatusSchema
+            : LegacyStatusSchema},
         {"running", Status.Running},
         {"complete", Status.Complete},
         {"success", Status.Success},
@@ -910,6 +1357,13 @@ bool WriteBatchRetargetStatus(
         {"xmlDefinitionParsingEnabled", false},
         {"jobs", std::move(Jobs)},
         {"errors", Status.Errors}};
+    if (Status.AssetBinding.Required)
+    {
+        Json["assetSelection"] =
+            ProfileCatalogBindingJson(Status.AssetBinding);
+        Json["candidateRouteSelected"] = false;
+        Json["candidateRouteAdopted"] = false;
+    }
     return WriteTextAtomic(OutputJson, Json.dump(2) + "\n", OutError);
 }
 
@@ -928,9 +1382,26 @@ bool ReadBatchRetargetStatus(
             return false;
         }
         const nlohmann::json Json = nlohmann::json::parse(Stream);
-        if (Json.at("schema").get<std::string>() != StatusSchema)
+        const std::string Schema =
+            Json.at("schema").get<std::string>();
+        if (Schema != LegacyStatusSchema &&
+            Schema != ProfileCatalogStatusSchema)
         {
             OutError = "unsupported batch retarget status schema";
+            return false;
+        }
+        const nlohmann::json& Execution =
+            Json.at("executionPolicy");
+        if (Schema == ProfileCatalogStatusSchema &&
+            (Execution.at("maximumConcurrentJobs")
+                    .get<std::size_t>() != 1 ||
+             Execution.at("mode").get<std::string>() !=
+                 "streaming_one_animation_per_worker" ||
+             !Execution.at("continueAfterJobFailure").get<bool>()))
+        {
+            OutError =
+                "profile-backed batch status violates the fixed "
+                "serial execution policy";
             return false;
         }
         OutStatus = {};
@@ -970,8 +1441,60 @@ bool ReadBatchRetargetStatus(
             Json.at("enableSpinePelvisFollow").get<bool>();
         OutStatus.EnableSourceMotionFootLock =
             Json.at("enableSourceMotionFootLock").get<bool>();
+        if (Schema == ProfileCatalogStatusSchema)
+        {
+            if (!OutStatus.AnimationDirectory.empty() ||
+                OutStatus.Recursive)
+            {
+                OutError =
+                    "profile-backed batch status may not claim folder "
+                    "scan semantics";
+                return false;
+            }
+            if (Json.at("candidateRouteSelected").get<bool>() ||
+                Json.at("candidateRouteAdopted").get<bool>())
+            {
+                OutError =
+                    "profile-backed batch status may not select or "
+                    "adopt the candidate route";
+                return false;
+            }
+            OutStatus.AssetBinding =
+                ReadProfileCatalogBindingJson(
+                    Json.at("assetSelection"));
+        }
+        std::set<std::string> ProfileAnimationIds;
         for (const nlohmann::json& Job : Json.at("jobs"))
-            OutStatus.Jobs.push_back(ReadJobJson(Job));
+        {
+            BatchRetargetJob Parsed = ReadJobJson(
+                Job, Schema == ProfileCatalogStatusSchema);
+            if (Schema == ProfileCatalogStatusSchema)
+            {
+                if (Parsed.SourceAnimationId != Parsed.ClipId ||
+                    Parsed.SourceAnimationSkeletonId !=
+                        OutStatus.AssetBinding.SourceSkeletonId)
+                {
+                    throw std::runtime_error(
+                        "profile-backed batch status job provenance "
+                        "does not match its clip or source profile");
+                }
+                if (!ProfileAnimationIds.insert(
+                        Parsed.SourceAnimationId).second)
+                {
+                    throw std::runtime_error(
+                        "profile-backed batch status contains duplicate "
+                        "animation IDs");
+                }
+            }
+            OutStatus.Jobs.push_back(std::move(Parsed));
+        }
+        if (Schema == ProfileCatalogStatusSchema &&
+            OutStatus.Jobs.size() != OutStatus.TotalJobs)
+        {
+            throw std::runtime_error(
+                "profile-backed batch status job inventory does not "
+                "match its declared total");
+        }
         OutStatus.Errors = Json.at("errors").get<std::vector<std::string>>();
         return true;
     }
@@ -1018,6 +1541,7 @@ BatchRetargetRunResult RunBatchRetarget(
     Status.AnimationStack = Request.AnimationStack;
     Status.EnableSpinePelvisFollow = Request.EnableSpinePelvisFollow;
     Status.EnableSourceMotionFootLock = Request.EnableSourceMotionFootLock;
+    Status.AssetBinding = Request.AssetBinding;
     Status.Jobs = Plan.Jobs;
     Recount(Status);
     const auto BatchStart = std::chrono::steady_clock::now();
@@ -1046,31 +1570,8 @@ BatchRetargetRunResult RunBatchRetarget(
         }
 
         const auto JobStart = std::chrono::steady_clock::now();
-        RetargetBridgeRequest Single;
-        Single.RouteKind =
-            Request.SourceCharacter.DefinitionKind ==
-                    UEIKJsonDefinitionKind
-                ? RetargetBridgeRouteKind::UEIKJsonV1
-                : RetargetBridgeRouteKind::ExternalFoundationV1;
-        Single.SourceAnimationFbx = Job.SourceAnimationFbx;
-        Single.TargetSkeletonFbx = Request.TargetCharacter.RestFbx;
-        Single.SourceRestFbx = Request.SourceCharacter.RestFbx;
-        Single.OutputDirectory = Job.JobDirectory;
-        Single.Tools = Request.Tools;
-        Single.ClipId = Job.ClipId;
-        Single.ClipLabel = Job.ClipLabel;
-        Single.AnimationStack = Request.AnimationStack;
-        Single.SourceRigJson =
-            Request.SourceCharacter.DefinitionFile;
-        Single.TargetRigJson =
-            Request.TargetCharacter.DefinitionFile;
-        Single.SourceAlignmentRetargeterJson =
-            Request.SourceCharacter.AlignmentRetargeterFile;
-        Single.TargetAlignmentRetargeterJson =
-            Request.TargetCharacter.AlignmentRetargeterFile;
-        Single.EnableSpinePelvisFollow = Request.EnableSpinePelvisFollow;
-        Single.EnableSourceMotionFootLock =
-            Request.EnableSourceMotionFootLock;
+        const RetargetBridgeRequest Single =
+            BuildBridgeRequestForJob(Request, Job);
 
         const RetargetBridgeRunResult Bridge = RunRetargetBridge(Single);
         Job.SourceAnimationSha256 = Bridge.SourceAnimationSha256;

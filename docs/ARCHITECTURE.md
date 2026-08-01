@@ -15,7 +15,9 @@ External SHA-256 asset catalog
 Installed .skrtgprofile v1 packages
   + source rest / IK Rig / alignment
   + target rest / IK Rig / alignment
-  -> Bridge preflight
+  -> single-job Bridge v5
+     or profile-backed Batch v3 -> one Bridge v5 request per clip
+  -> complete-selection preflight
   -> UE IK JSON Worker
   -> verified target FBX + review payload
   -> SKRV packer
@@ -39,6 +41,15 @@ from a profile. The Bridge does not trust the Viewer's in-memory merge: it
 re-hashes and inspects each bound package, checks profile identity, version,
 role capability, and extracted resource hashes, then verifies the animation
 against the original external catalog.
+
+The profile-backed batch panel writes request v3. It accepts only installed
+source and target profiles and explicit animation records that match the
+source profile ID and skeleton signature. The batch planner converts every
+record into the same Bridge v5 contract used by the single-job flow and
+preflights all jobs before creating the output directory. It never scans a
+loose animation folder. Execution remains streaming and serial: one Worker
+process exits before the next starts. Legacy request v1/v2 remains readable
+without acquiring profile or catalog provenance.
 
 ## Coordinate path
 
@@ -76,7 +87,11 @@ retarget solve.
 - all external inputs are SHA-256 bound;
 - route and hierarchy mismatches fail closed;
 - output directories follow no-overwrite rules;
-- batch jobs run one Worker at a time;
+- profile-backed batch jobs all preflight before output creation and run one
+  Worker at a time;
+- a batch clip keeps its own catalog ID, owner, FBX hash, Golden JSON hash,
+  stack name, and import modes in request and status provenance;
+- profile-backed batch status cannot select or adopt the candidate route;
 - staged operations commit only after validation;
 - missing private catalogs produce an empty Viewer, not inferred defaults.
 - profile installation uses a verified partial directory and atomic rename;

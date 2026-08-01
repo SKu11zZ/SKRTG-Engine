@@ -1,3 +1,4 @@
+#include "skrtg/viewer/batch_retarget.h"
 #include "skrtg/viewer/profile/character_profile.h"
 #include "skrtg/viewer/retarget_asset_catalog.h"
 #include "skrtg/viewer/retarget_bridge.h"
@@ -194,8 +195,14 @@ void TestProfileBoundBridge()
         CatalogRoot / "assets" / "source_animation.fbx";
     const std::filesystem::path Golden =
         CatalogRoot / "assets" / "source_animation.json";
+    const std::filesystem::path AnimationTwo =
+        CatalogRoot / "assets" / "source_animation_two.fbx";
+    const std::filesystem::path GoldenTwo =
+        CatalogRoot / "assets" / "source_animation_two.json";
     Write(Animation, "source-animation");
     Write(Golden, "{}");
+    Write(AnimationTwo, "source-animation-two");
+    Write(GoldenTwo, "{\"clip\":2}");
 
     const std::filesystem::path CatalogFile =
         CatalogRoot / "retarget_asset_catalog.json";
@@ -211,8 +218,8 @@ void TestProfileBoundBridge()
                  {"test-source.v2", "test-target.v2"})},
             {"skeletons", Json::array()},
             {"animations",
-             Json::array(
-                 {{{"id", "source_clip"},
+             Json::array({
+                 {{"id", "source_clip"},
                    {"label", "Source Clip"},
                    {"sourceSkeletonId", "test-source.v2"},
                    {"sourceSkeletonSignatureSha256",
@@ -234,7 +241,30 @@ void TestProfileBoundBridge()
                    {"goldenJson",
                     FileBinding(
                         "assets/source_animation.json",
-                        Golden)}}})}}
+                        Golden)}},
+                 {{"id", "source_clip_two"},
+                   {"label", "Source Clip Two"},
+                   {"sourceSkeletonId", "test-source.v2"},
+                   {"sourceSkeletonSignatureSha256",
+                    std::string(64, 'A')},
+                   {"sourceFbxImportMode",
+                    RetargetBridgeSourceFbxImportModeName(
+                        RetargetBridgeSourceFbxImportMode::
+                            UE58ExactGoldenV1)},
+                   {"restFbxImportMode",
+                    RetargetBridgeRestFbxImportModeName(
+                        RetargetBridgeRestFbxImportMode::
+                            UE58ExportedYReflectionV1)},
+                   {"animationStack", "Take 001"},
+                   {"enabled", true},
+                   {"fbx",
+                    FileBinding(
+                        "assets/source_animation_two.fbx",
+                        AnimationTwo)},
+                   {"goldenJson",
+                    FileBinding(
+                        "assets/source_animation_two.json",
+                        GoldenTwo)}}})}}
             .dump(2) +
             "\n");
     const RetargetAssetCatalogLoadResult DeclaredCatalog =
@@ -378,6 +408,220 @@ void TestProfileBoundBridge()
     Check(PreflightRetargetBridge(RoundTrip).Success,
           "round-tripped profile-bound request should pass preflight");
 
+    BatchRetargetRequest Batch;
+    Batch.SourceCharacter.RestFbx = Request.SourceRestFbx;
+    Batch.SourceCharacter.DefinitionKind = "ue_ik_json_v1";
+    Batch.SourceCharacter.DefinitionFile = Request.SourceRigJson;
+    Batch.SourceCharacter.AlignmentRetargeterFile =
+        Request.SourceAlignmentRetargeterJson;
+    Batch.TargetCharacter.RestFbx = Request.TargetSkeletonFbx;
+    Batch.TargetCharacter.DefinitionKind = "ue_ik_json_v1";
+    Batch.TargetCharacter.DefinitionFile = Request.TargetRigJson;
+    Batch.TargetCharacter.AlignmentRetargeterFile =
+        Request.TargetAlignmentRetargeterJson;
+    Batch.OutputDirectory = Root.Path / "batch_output";
+    Batch.Tools = Request.Tools;
+    Batch.Recursive = false;
+    Batch.EnableSpinePelvisFollow = false;
+    Batch.EnableSourceMotionFootLock = false;
+    Batch.AssetBinding = Binding;
+    const auto AddBatchAnimation =
+        [&](const std::string& Id,
+            const std::string& Label,
+            const std::filesystem::path& Fbx,
+            const std::filesystem::path& GoldenJson,
+            const std::string& Stack)
+        {
+            BatchCatalogAnimationInput AnimationInput;
+            AnimationInput.AnimationId = Id;
+            AnimationInput.Label = Label;
+            AnimationInput.SourceSkeletonId = "test-source.v2";
+            AnimationInput.SourceAnimationFbx = Fbx;
+            AnimationInput.SourceAnimationSha256 = Hash(Fbx);
+            AnimationInput.SourceAnimationGoldenJson = GoldenJson;
+            AnimationInput.SourceAnimationGoldenJsonSha256 =
+                Hash(GoldenJson);
+            AnimationInput.AnimationStack = Stack;
+            Batch.CatalogAnimations.push_back(
+                std::move(AnimationInput));
+        };
+    AddBatchAnimation(
+        "source_clip", "Source Clip", Animation, Golden, "");
+    AddBatchAnimation(
+        "source_clip_two", "Source Clip Two",
+        AnimationTwo, GoldenTwo, "Take 001");
+
+    const BatchRetargetPlan BatchPlan =
+        BuildBatchRetargetPlan(Batch);
+    if (!BatchPlan.Success)
+    {
+        for (const std::string& BatchError : BatchPlan.Errors)
+            std::cerr << "batch preflight: " << BatchError << '\n';
+    }
+    Check(BatchPlan.Success,
+          "profile-backed batch v3 should preflight every selected "
+          "catalog animation");
+    Check(BatchPlan.MaximumConcurrentJobs == 1 &&
+              BatchPlan.Jobs.size() == 2,
+          "profile-backed batch must preserve fixed serial execution");
+    Check(BatchPlan.Jobs.size() == 2 &&
+              BatchPlan.Jobs[1].SourceAnimationId ==
+                  "source_clip_two" &&
+              BatchPlan.Jobs[1].SourceAnimationGoldenJson ==
+                  GoldenTwo &&
+              BatchPlan.Jobs[1].AnimationStack == "Take 001",
+          "each batch job must retain its own catalog ID, Golden JSON, "
+          "and animation Stack");
+
+    const std::filesystem::path BatchRequestFile =
+        Root.Path / "batch_v3.json";
+    Check(WriteBatchRetargetRequest(
+              Batch, BatchRequestFile, Error),
+          "profile-backed batch v3 should serialize");
+    const Json BatchJson = Json::parse(Read(BatchRequestFile));
+    Check(BatchJson.at("schema") ==
+              "skrtg.native_viewer.batch_retarget_request.v3" &&
+              BatchJson.at("animations").size() == 2 &&
+              BatchJson.at("animationDirectory") == "" &&
+              !BatchJson.at("recursive").get<bool>(),
+          "profile-backed batch v3 JSON must contain explicit catalog "
+          "animations and no loose folder scan");
+    BatchRetargetRequest BatchRoundTrip;
+    Check(ReadBatchRetargetRequest(
+              BatchRequestFile, BatchRoundTrip, Error),
+          "profile-backed batch v3 should deserialize");
+    Check(BatchRoundTrip.AssetBinding.SourceProfilePackageSha256 ==
+              Binding.SourceProfilePackageSha256 &&
+              BatchRoundTrip.CatalogAnimations.size() == 2 &&
+              BuildBatchRetargetPlan(BatchRoundTrip).Success,
+          "round-tripped batch v3 must preserve profile bindings and "
+          "pass full preflight");
+    Json RecursiveBatchJson = BatchJson;
+    RecursiveBatchJson["recursive"] = true;
+    const std::filesystem::path RecursiveBatchFile =
+        Root.Path / "batch_v3_recursive.json";
+    Write(
+        RecursiveBatchFile,
+        RecursiveBatchJson.dump(2) + "\n");
+    BatchRetargetRequest RejectedRecursive;
+    Check(!ReadBatchRetargetRequest(
+              RecursiveBatchFile, RejectedRecursive, Error),
+          "profile-backed batch v3 reader must reject folder-scan "
+          "semantics");
+
+    BatchRetargetStatus BatchStatus;
+    BatchStatus.MaximumConcurrentJobs = 1;
+    BatchStatus.TotalJobs = BatchPlan.Jobs.size();
+    BatchStatus.SourceCharacter = Batch.SourceCharacter;
+    BatchStatus.TargetCharacter = Batch.TargetCharacter;
+    BatchStatus.OutputDirectory = Batch.OutputDirectory;
+    BatchStatus.Recursive = false;
+    BatchStatus.EnableSpinePelvisFollow = false;
+    BatchStatus.EnableSourceMotionFootLock = false;
+    BatchStatus.AssetBinding = Batch.AssetBinding;
+    BatchStatus.Jobs = BatchPlan.Jobs;
+    const std::filesystem::path BatchStatusFile =
+        Root.Path / "batch_status_v2.json";
+    Check(WriteBatchRetargetStatus(
+              BatchStatus, BatchStatusFile, Error),
+          "profile-backed batch status v2 should serialize");
+    Check(Json::parse(Read(BatchStatusFile)).at("schema") ==
+              "skrtg.native_viewer.batch_retarget_status.v2",
+          "profile-backed status must use the versioned v2 schema");
+    BatchRetargetStatus StatusRoundTrip;
+    Check(ReadBatchRetargetStatus(
+              BatchStatusFile, StatusRoundTrip, Error) &&
+              StatusRoundTrip.AssetBinding.Required &&
+              StatusRoundTrip.Jobs.size() == 2 &&
+              StatusRoundTrip.Jobs[0].SourceAnimationGoldenJson ==
+                  Golden,
+          "profile-backed status v2 must retain package and per-job "
+          "Golden provenance");
+    Json SelectedStatusJson =
+        Json::parse(Read(BatchStatusFile));
+    SelectedStatusJson["candidateRouteSelected"] = true;
+    const std::filesystem::path SelectedStatusFile =
+        Root.Path / "batch_status_v2_selected.json";
+    Write(
+        SelectedStatusFile,
+        SelectedStatusJson.dump(2) + "\n");
+    BatchRetargetStatus RejectedSelectedStatus;
+    Check(!ReadBatchRetargetStatus(
+              SelectedStatusFile, RejectedSelectedStatus, Error),
+          "profile-backed status v2 must reject candidate-route "
+          "selection or adoption claims");
+    Json ConcurrentStatusJson =
+        Json::parse(Read(BatchStatusFile));
+    ConcurrentStatusJson["executionPolicy"]
+        ["maximumConcurrentJobs"] = 2;
+    const std::filesystem::path ConcurrentStatusFile =
+        Root.Path / "batch_status_v2_concurrent.json";
+    Write(
+        ConcurrentStatusFile,
+        ConcurrentStatusJson.dump(2) + "\n");
+    BatchRetargetStatus RejectedConcurrentStatus;
+    Check(!ReadBatchRetargetStatus(
+              ConcurrentStatusFile, RejectedConcurrentStatus, Error),
+          "profile-backed status v2 must reject a non-serial "
+          "execution claim");
+    Json ScanningStatusJson =
+        Json::parse(Read(BatchStatusFile));
+    ScanningStatusJson["recursive"] = true;
+    const std::filesystem::path ScanningStatusFile =
+        Root.Path / "batch_status_v2_scanning.json";
+    Write(
+        ScanningStatusFile,
+        ScanningStatusJson.dump(2) + "\n");
+    BatchRetargetStatus RejectedScanningStatus;
+    Check(!ReadBatchRetargetStatus(
+              ScanningStatusFile, RejectedScanningStatus, Error),
+          "profile-backed status v2 must reject recursive folder-scan "
+          "semantics");
+    Json MissingProvenanceStatusJson =
+        Json::parse(Read(BatchStatusFile));
+    MissingProvenanceStatusJson["jobs"][0].erase(
+        "sourceAnimationGoldenJsonSha256");
+    const std::filesystem::path MissingProvenanceStatusFile =
+        Root.Path / "batch_status_v2_missing_provenance.json";
+    Write(
+        MissingProvenanceStatusFile,
+        MissingProvenanceStatusJson.dump(2) + "\n");
+    BatchRetargetStatus RejectedMissingProvenanceStatus;
+    Check(!ReadBatchRetargetStatus(
+              MissingProvenanceStatusFile,
+              RejectedMissingProvenanceStatus, Error),
+          "profile-backed status v2 must reject a job with missing "
+          "per-animation provenance");
+
+    BatchRetargetRequest CrossSource = Batch;
+    CrossSource.CatalogAnimations[1].SourceSkeletonId =
+        "test-target.v2";
+    Check(!BuildBatchRetargetPlan(CrossSource).Success,
+          "batch preflight must reject a clip bound to another source "
+          "profile");
+    BatchRetargetRequest Duplicate = Batch;
+    Duplicate.CatalogAnimations[1].AnimationId = "source_clip";
+    Check(!BuildBatchRetargetPlan(Duplicate).Success,
+          "batch preflight must reject duplicate animation IDs");
+    BatchRetargetRequest LooseFolder = Batch;
+    LooseFolder.AnimationDirectory = CatalogRoot;
+    Check(!BuildBatchRetargetPlan(LooseFolder).Success,
+          "profile-backed batch must reject arbitrary folder scanning");
+    BatchRetargetRequest RecursiveFolderSemantics = Batch;
+    RecursiveFolderSemantics.Recursive = true;
+    Check(!BuildBatchRetargetPlan(RecursiveFolderSemantics).Success,
+          "profile-backed batch must reject recursive folder semantics "
+          "for direct C++ callers");
+    const std::string OriginalGoldenTwo = Read(GoldenTwo);
+    Write(GoldenTwo, "tampered-golden");
+    Check(!BuildBatchRetargetPlan(Batch).Success,
+          "changed per-animation Golden JSON must fail the whole batch "
+          "before output commit");
+    Check(!std::filesystem::exists(Batch.OutputDirectory),
+          "failed full-batch preflight must not create the output "
+          "directory");
+    Write(GoldenTwo, OriginalGoldenTwo);
+
     const std::string OriginalCatalog = Read(CatalogFile);
     Json MismatchedCatalog = Json::parse(OriginalCatalog);
     MismatchedCatalog["animations"][0]
@@ -458,12 +702,63 @@ void TestLegacyV4JsonShape()
                   "sourceProfilePackageSha256"),
           "legacy v4 status shape must not gain v5 profile fields");
 }
+
+void TestLegacyBatchV2JsonShape()
+{
+    TemporaryRoot Root;
+    BatchRetargetRequest Request;
+    Request.SourceCharacter.DefinitionKind = "ue_ik_json_v1";
+    Request.TargetCharacter.DefinitionKind = "ue_ik_json_v1";
+    Request.AnimationDirectory = Root.Path / "animations";
+    Request.OutputDirectory = Root.Path / "output";
+    Request.Recursive = true;
+
+    const std::filesystem::path RequestFile =
+        Root.Path / "legacy_batch_v2.json";
+    std::string Error;
+    Check(WriteBatchRetargetRequest(
+              Request, RequestFile, Error),
+          "legacy batch v2 request should serialize");
+    const Json RequestJson = Json::parse(Read(RequestFile));
+    Check(RequestJson.at("schema") ==
+              "skrtg.native_viewer.batch_retarget_request.v2",
+          "profile-free UE batch must retain the v2 schema");
+    Check(!RequestJson.contains("assetSelection") &&
+              !RequestJson.contains("animations"),
+          "legacy batch v2 must not gain profile/catalog fields");
+    BatchRetargetRequest RoundTrip;
+    Check(ReadBatchRetargetRequest(
+              RequestFile, RoundTrip, Error) &&
+              !RoundTrip.AssetBinding.Required &&
+              RoundTrip.CatalogAnimations.empty() &&
+              RoundTrip.Recursive,
+          "legacy batch v2 should remain readable without profile "
+          "bindings");
+
+    BatchRetargetStatus Status;
+    Status.MaximumConcurrentJobs = 1;
+    Status.Jobs.push_back({});
+    const std::filesystem::path StatusFile =
+        Root.Path / "legacy_batch_status_v1.json";
+    Check(WriteBatchRetargetStatus(
+              Status, StatusFile, Error),
+          "legacy batch status v1 should serialize");
+    const Json StatusJson = Json::parse(Read(StatusFile));
+    Check(StatusJson.at("schema") ==
+              "skrtg.native_viewer.batch_retarget_status.v1" &&
+              !StatusJson.at("jobs").at(0).contains(
+                  "sourceAnimationId") &&
+              !StatusJson.contains("assetSelection"),
+          "legacy batch status v1 shape must not gain profile/catalog "
+          "fields");
+}
 } // namespace
 
 int main()
 {
     TestProfileBoundBridge();
     TestLegacyV4JsonShape();
+    TestLegacyBatchV2JsonShape();
     if (Failures != 0)
     {
         std::cerr << Failures

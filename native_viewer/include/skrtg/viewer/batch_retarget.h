@@ -19,6 +19,25 @@ struct BatchCharacterInput
     std::filesystem::path AlignmentRetargeterFile;
 };
 
+// A profile-backed batch never scans an arbitrary animation folder. Every
+// selected clip remains bound to one catalog record, one source profile
+// fingerprint, and one UE-exported Golden JSON file.
+struct BatchCatalogAnimationInput
+{
+    std::string AnimationId;
+    std::string Label;
+    std::string SourceSkeletonId;
+    std::filesystem::path SourceAnimationFbx;
+    std::string SourceAnimationSha256;
+    std::filesystem::path SourceAnimationGoldenJson;
+    std::string SourceAnimationGoldenJsonSha256;
+    std::string AnimationStack;
+    RetargetBridgeSourceFbxImportMode SourceFbxImportMode =
+        RetargetBridgeSourceFbxImportMode::UE58ExactGoldenV1;
+    RetargetBridgeRestFbxImportMode RestFbxImportMode =
+        RetargetBridgeRestFbxImportMode::UE58ExportedYReflectionV1;
+};
+
 struct BatchRetargetRequest
 {
     BatchCharacterInput SourceCharacter;
@@ -30,6 +49,8 @@ struct BatchRetargetRequest
     bool Recursive = true;
     bool EnableSpinePelvisFollow = true;
     bool EnableSourceMotionFootLock = true;
+    RetargetBridgeAssetBinding AssetBinding;
+    std::vector<BatchCatalogAnimationInput> CatalogAnimations;
 };
 
 enum class BatchRetargetJobState
@@ -50,7 +71,16 @@ struct BatchRetargetJob
     std::filesystem::path FinalFbx;
     std::string ClipId;
     std::string ClipLabel;
+    std::string SourceAnimationId;
+    std::string SourceAnimationSkeletonId;
     std::string SourceAnimationSha256;
+    std::filesystem::path SourceAnimationGoldenJson;
+    std::string SourceAnimationGoldenJsonSha256;
+    std::string AnimationStack;
+    RetargetBridgeSourceFbxImportMode SourceFbxImportMode =
+        RetargetBridgeSourceFbxImportMode::UE58ExactGoldenV1;
+    RetargetBridgeRestFbxImportMode RestFbxImportMode =
+        RetargetBridgeRestFbxImportMode::UE58ExportedYReflectionV1;
     std::string FinalFbxSha256;
     BatchRetargetJobState State = BatchRetargetJobState::Pending;
     double DurationSeconds = 0.0;
@@ -88,6 +118,7 @@ struct BatchRetargetStatus
     std::string AnimationStack;
     bool EnableSpinePelvisFollow = true;
     bool EnableSourceMotionFootLock = true;
+    RetargetBridgeAssetBinding AssetBinding;
     std::vector<BatchRetargetJob> Jobs;
     std::vector<std::string> Errors;
 };

@@ -67,8 +67,14 @@ The native Viewer can also browse, verify, install, refresh, and remove
 profiles. Multiple versions may be installed; the highest SemVer version is
 active. Bridge request v5 binds the selected source and target package hashes
 and independently re-verifies both packages before starting the Worker.
+The batch panel uses the same installed profiles and catalog filtering. Its
+profile-backed v3 request expands every selected animation into an independent
+Bridge v5 job, preflights the complete selection before creating output, and
+runs one Worker at a time.
 
 See [docs/SKRTGPROFILE_V1.md](docs/SKRTGPROFILE_V1.md) for the exact contract.
+See [docs/PROFILE_BATCH_V3.md](docs/PROFILE_BATCH_V3.md) for the batch request,
+status, and failure contract.
 
 ## Build
 
@@ -122,9 +128,14 @@ only into the local build output; it is ignored by Git.
 - An animation-only catalog can declare `externalSkeletonIds`; profile-backed
   characters do not need duplicate loose skeleton resources in that catalog.
 - The Viewer consumes SKRV and does not recompute retargeting.
-- Batch execution is serial by design.
-- `.skrtgprofile` bindings currently apply to the single-job Viewer/Bridge v5
-  flow; the legacy batch panel still uses its existing loose-input contract.
+- Profile-backed batch v3 accepts only installed source/target profiles and
+  explicitly selected compatible catalog animations. It does not scan an
+  arbitrary animation directory.
+- Batch execution is serial by design. All selected profile-backed jobs pass
+  package, catalog, animation, Golden, and resource-hash preflight before the
+  output directory is created.
+- Legacy batch request v1/v2 remains readable for compatibility, but it does
+  not gain profile provenance.
 - Material, texture, morph-target, portable runtime, and cross-platform
   release gates remain open work.
 

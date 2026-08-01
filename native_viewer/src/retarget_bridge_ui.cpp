@@ -16,6 +16,7 @@
 #include <cstring>
 #include <ctime>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -627,7 +628,7 @@ struct RetargetBridgeUi::Impl
         {
             Catalog = std::move(CatalogResult.Catalog);
         }
-        else
+        else if (!UseUEIKJsonRoute)
         {
             Catalog.CatalogId = "profile_store";
             Catalog.CatalogFile =
@@ -785,6 +786,7 @@ struct RetargetBridgeUi::Impl
     void RefreshCompatibleAnimations(const bool SelectFirst)
     {
         CompatibleAnimationIndices.clear();
+        BatchSelectedAnimationIds.clear();
         AnimationIndex = -1;
         const RetargetSkeletonAsset* Source =
             SelectedSourceSkeleton();
@@ -792,6 +794,12 @@ struct RetargetBridgeUi::Impl
         CompatibleAnimationIndices =
             CompatibleRetargetAnimationIndices(
                 Catalog, Source->Id);
+        for (const std::size_t Index :
+             CompatibleAnimationIndices)
+        {
+            BatchSelectedAnimationIds.insert(
+                Catalog.Animations[Index].Id);
+        }
         if (SelectFirst && !CompatibleAnimationIndices.empty())
         {
             AnimationIndex = static_cast<int>(
@@ -973,31 +981,138 @@ struct RetargetBridgeUi::Impl
     BatchRetargetRequest BuildBatchRequest()
     {
         BatchRetargetRequest Request;
-        Request.SourceCharacter.RestFbx =
-            BufferPath(Buffers.SourceRest).lexically_normal();
-        Request.TargetCharacter.RestFbx =
-            BufferPath(Buffers.TargetSkeleton).lexically_normal();
         Request.SourceCharacter.DefinitionKind = UseUEIKJsonRoute
             ? "ue_ik_json_v1"
             : "external_foundation_v1";
         Request.TargetCharacter.DefinitionKind =
             Request.SourceCharacter.DefinitionKind;
-        if (UseUEIKJsonRoute)
+        if (UseUEIKJsonRoute && CatalogLoaded)
         {
-            Request.SourceCharacter.DefinitionFile =
-                BufferPath(Buffers.SourceRigJson).lexically_normal();
-            Request.TargetCharacter.DefinitionFile =
-                BufferPath(Buffers.TargetRigJson).lexically_normal();
-            Request.SourceCharacter.AlignmentRetargeterFile =
-                BufferPath(Buffers.SourceAlignmentRetargeterJson)
-                    .lexically_normal();
-            Request.TargetCharacter.AlignmentRetargeterFile =
-                BufferPath(Buffers.TargetAlignmentRetargeterJson)
-                    .lexically_normal();
-            Request.AnimationStack = Buffers.AnimationStack.data();
+            const RetargetSkeletonAsset* Source =
+                SelectedSourceSkeleton();
+            const RetargetSkeletonAsset* Target =
+                SelectedTargetSkeleton();
+            if (Source != nullptr)
+            {
+                Request.SourceCharacter.RestFbx =
+                    Source->RestFbx;
+                Request.SourceCharacter.DefinitionFile =
+                    Source->IkRigJson;
+                Request.SourceCharacter
+                    .AlignmentRetargeterFile =
+                        Source->AlignmentRetargeterJson;
+            }
+            if (Target != nullptr)
+            {
+                Request.TargetCharacter.RestFbx =
+                    Target->RestFbx;
+                Request.TargetCharacter.DefinitionFile =
+                    Target->IkRigJson;
+                Request.TargetCharacter
+                    .AlignmentRetargeterFile =
+                        Target->AlignmentRetargeterJson;
+            }
+
+            RetargetBridgeAssetBinding& Binding =
+                Request.AssetBinding;
+            Binding.Required = true;
+            Binding.CatalogFile = Catalog.CatalogFile;
+            Binding.CatalogSha256 = Catalog.CatalogSha256;
+            Binding.CatalogId = Catalog.CatalogId;
+            if (Source != nullptr)
+            {
+                Binding.SourceSkeletonId = Source->Id;
+                Binding.SourceRestSha256 =
+                    Source->RestFbxSha256;
+                Binding.SourceRigJsonSha256 =
+                    Source->IkRigJsonSha256;
+                Binding.SourceAlignmentRetargeterJsonSha256 =
+                    Source->AlignmentRetargeterJsonSha256;
+                if (const profile::InstalledCharacterProfile*
+                        Installed = ActiveProfileFor(Source->Id))
+                {
+                    Binding.SourceProfilePackage =
+                        Installed->PackagePath;
+                    Binding.SourceProfilePackageSha256 =
+                        Installed->PackageSha256;
+                    Binding.SourceProfileVersion =
+                        Installed->Profile.ProfileVersion;
+                }
+            }
+            if (Target != nullptr)
+            {
+                Binding.TargetSkeletonId = Target->Id;
+                Binding.TargetRestSha256 =
+                    Target->RestFbxSha256;
+                Binding.TargetRigJsonSha256 =
+                    Target->IkRigJsonSha256;
+                Binding.TargetAlignmentRetargeterJsonSha256 =
+                    Target->AlignmentRetargeterJsonSha256;
+                if (const profile::InstalledCharacterProfile*
+                        Installed = ActiveProfileFor(Target->Id))
+                {
+                    Binding.TargetProfilePackage =
+                        Installed->PackagePath;
+                    Binding.TargetProfilePackageSha256 =
+                        Installed->PackageSha256;
+                    Binding.TargetProfileVersion =
+                        Installed->Profile.ProfileVersion;
+                }
+            }
+            for (const std::size_t Index :
+                 CompatibleAnimationIndices)
+            {
+                const RetargetAnimationAsset& Animation =
+                    Catalog.Animations[Index];
+                if (!BatchSelectedAnimationIds.contains(
+                        Animation.Id))
+                {
+                    continue;
+                }
+                BatchCatalogAnimationInput Selected;
+                Selected.AnimationId = Animation.Id;
+                Selected.Label = Animation.Label;
+                Selected.SourceSkeletonId =
+                    Animation.SourceSkeletonId;
+                Selected.SourceAnimationFbx = Animation.Fbx;
+                Selected.SourceAnimationSha256 =
+                    Animation.FbxSha256;
+                Selected.SourceAnimationGoldenJson =
+                    Animation.GoldenJson;
+                Selected.SourceAnimationGoldenJsonSha256 =
+                    Animation.GoldenJsonSha256;
+                Selected.AnimationStack =
+                    Animation.AnimationStack;
+                Selected.SourceFbxImportMode =
+                    Animation.SourceFbxImportMode;
+                Selected.RestFbxImportMode =
+                    Animation.RestFbxImportMode;
+                Request.CatalogAnimations.push_back(
+                    std::move(Selected));
+            }
+            Request.Recursive = false;
         }
-        Request.AnimationDirectory =
-            BufferPath(Buffers.BatchAnimationDirectory).lexically_normal();
+        else if (!UseUEIKJsonRoute)
+        {
+            Request.SourceCharacter.RestFbx =
+                BufferPath(Buffers.SourceRest)
+                    .lexically_normal();
+            Request.TargetCharacter.RestFbx =
+                BufferPath(Buffers.TargetSkeleton)
+                    .lexically_normal();
+            Request.AnimationDirectory =
+                BufferPath(Buffers.BatchAnimationDirectory)
+                    .lexically_normal();
+            Request.Recursive = BatchRecursive;
+        }
+        else
+        {
+            // Keep UE batch fail-closed when the profile/catalog layer is
+            // unavailable. BuildBatchRetargetPlan will report the missing
+            // bindings without falling back to loose paths.
+            Request.AssetBinding.Required = true;
+            Request.Recursive = false;
+        }
         const std::filesystem::path OutputRoot =
             BufferPath(Buffers.BatchOutputRoot).lexically_normal();
         Request.OutputDirectory =
@@ -1012,7 +1127,6 @@ struct RetargetBridgeUi::Impl
                  std::to_string(Suffix++));
         }
         Request.Tools = Tools;
-        Request.Recursive = BatchRecursive;
         Request.EnableSpinePelvisFollow =
             !UseUEIKJsonRoute && SpinePelvisFollow;
         Request.EnableSourceMotionFootLock =
@@ -1122,6 +1236,8 @@ struct RetargetBridgeUi::Impl
                 LastBatchRequest.EnableSpinePelvisFollow;
             LastBatchStatus.EnableSourceMotionFootLock =
                 LastBatchRequest.EnableSourceMotionFootLock;
+            LastBatchStatus.AssetBinding =
+                LastBatchRequest.AssetBinding;
             LastBatchStatus.Jobs = LastBatchPlan.Jobs;
         }
         LastBatchStatus.Running = !Terminated;
@@ -1164,6 +1280,7 @@ struct RetargetBridgeUi::Impl
     int TargetSkeletonIndex = -1;
     int AnimationIndex = -1;
     std::vector<std::size_t> CompatibleAnimationIndices;
+    std::set<std::string> BatchSelectedAnimationIds;
     std::vector<std::string> CatalogErrors;
     std::vector<std::string> CatalogWarnings;
     std::vector<std::string> ProfileErrors;
@@ -1756,7 +1873,7 @@ void RetargetBridgeUi::Draw()
                 &State->BatchOpen, ImGuiWindowFlags_NoCollapse))
         {
             ImGui::TextWrapped(
-                "先选择路线、源与目标 Rest FBX，再选择动画和输出文件夹。批处理固定并发 1；每个 Worker 完成验证并退出后才开始下一条，单条失败会记录并继续。");
+                "Profile 批处理会逐项绑定角色包、动画目录记录与 UE Golden；启动前验证完整批次。执行并发固定为 1，每个 Worker 完成验证并退出后才开始下一条。");
             ImGui::SeparatorText("重定向路线");
             if (ImGui::RadioButton(
                     "外部 Foundation 兼容路线##BatchExternalFoundationRoute",
@@ -1772,61 +1889,200 @@ void RetargetBridgeUi::Draw()
                 State->UseUEIKJsonRoute = true;
             }
             ImGui::SeparatorText("角色与目录");
-            DrawPathRow(
-                "源角色 T-pose FBX", "##BatchSourceRest",
-                State->Buffers.SourceRest, State->Browser,
-                BrowseTarget::SourceRest, BrowseSelection::FbxFile);
-            DrawPathRow(
-                "目标角色 T-pose FBX", "##BatchTargetRest",
-                State->Buffers.TargetSkeleton, State->Browser,
-                BrowseTarget::TargetSkeleton, BrowseSelection::FbxFile);
             if (State->UseUEIKJsonRoute)
             {
-                DrawPathRow(
-                    "源 IK Rig JSON", "##BatchSourceRigJson",
-                    State->Buffers.SourceRigJson, State->Browser,
-                    BrowseTarget::SourceRigJson,
-                    BrowseSelection::JsonFile);
-                DrawPathRow(
-                    "目标 IK Rig JSON", "##BatchTargetRigJson",
-                    State->Buffers.TargetRigJson, State->Browser,
-                    BrowseTarget::TargetRigJson,
-                    BrowseSelection::JsonFile);
-                DrawPathRow(
-                    "源对齐 IK Retargeter JSON",
-                    "##BatchSourceAlignmentRetargeterJson",
-                    State->Buffers.SourceAlignmentRetargeterJson,
-                    State->Browser,
-                    BrowseTarget::SourceAlignmentRetargeterJson,
-                    BrowseSelection::JsonFile);
-                DrawPathRow(
-                    "目标对齐 IK Retargeter JSON",
-                    "##BatchTargetAlignmentRetargeterJson",
-                    State->Buffers.TargetAlignmentRetargeterJson,
-                    State->Browser,
-                    BrowseTarget::TargetAlignmentRetargeterJson,
-                    BrowseSelection::JsonFile);
-                ImGui::TextUnformatted(
-                    "动画 Stack（留空时每个 FBX 确定性选择最长 Stack）");
-                ImGui::SetNextItemWidth(-1.0F);
-                ImGui::InputText(
-                    "##BatchAnimationStack",
-                    State->Buffers.AnimationStack.data(),
-                    State->Buffers.AnimationStack.size());
+                if (State->CatalogLoaded)
+                {
+                    const RetargetSkeletonAsset* Source =
+                        State->SelectedSourceSkeleton();
+                    const bool SourceIsProfile =
+                        Source != nullptr &&
+                        State->ActiveProfileFor(Source->Id) != nullptr;
+                    const char* SourcePreview = SourceIsProfile
+                        ? Source->Label.c_str()
+                        : "请选择已安装的源 Profile";
+                    ImGui::TextUnformatted("源角色 Profile");
+                    ImGui::SetNextItemWidth(-1.0F);
+                    if (ImGui::BeginCombo(
+                            "##BatchSourceProfile",
+                            SourcePreview))
+                    {
+                        for (std::size_t Index = 0;
+                             Index < State->Catalog.Skeletons.size();
+                             ++Index)
+                        {
+                            const RetargetSkeletonAsset& Skeleton =
+                                State->Catalog.Skeletons[Index];
+                            if (!Skeleton.SourceEnabled ||
+                                State->ActiveProfileFor(
+                                    Skeleton.Id) == nullptr)
+                            {
+                                continue;
+                            }
+                            const bool Selected =
+                                State->SourceSkeletonIndex ==
+                                static_cast<int>(Index);
+                            ImGui::PushID(
+                                ("batch_source_" + Skeleton.Id)
+                                    .c_str());
+                            if (ImGui::Selectable(
+                                    Skeleton.Label.c_str(),
+                                    Selected))
+                            {
+                                State->SourceSkeletonIndex =
+                                    static_cast<int>(Index);
+                                State->RefreshCompatibleAnimations(
+                                    false);
+                            }
+                            if (Selected)
+                                ImGui::SetItemDefaultFocus();
+                            ImGui::PopID();
+                        }
+                        ImGui::EndCombo();
+                    }
+
+                    const RetargetSkeletonAsset* Target =
+                        State->SelectedTargetSkeleton();
+                    const bool TargetIsProfile =
+                        Target != nullptr &&
+                        State->ActiveProfileFor(Target->Id) != nullptr;
+                    const char* TargetPreview = TargetIsProfile
+                        ? Target->Label.c_str()
+                        : "请选择已安装的目标 Profile";
+                    ImGui::TextUnformatted("目标角色 Profile");
+                    ImGui::SetNextItemWidth(-1.0F);
+                    if (ImGui::BeginCombo(
+                            "##BatchTargetProfile",
+                            TargetPreview))
+                    {
+                        for (std::size_t Index = 0;
+                             Index < State->Catalog.Skeletons.size();
+                             ++Index)
+                        {
+                            const RetargetSkeletonAsset& Skeleton =
+                                State->Catalog.Skeletons[Index];
+                            if (!Skeleton.TargetEnabled ||
+                                State->ActiveProfileFor(
+                                    Skeleton.Id) == nullptr)
+                            {
+                                continue;
+                            }
+                            const bool Selected =
+                                State->TargetSkeletonIndex ==
+                                static_cast<int>(Index);
+                            ImGui::PushID(
+                                ("batch_target_" + Skeleton.Id)
+                                    .c_str());
+                            if (ImGui::Selectable(
+                                    Skeleton.Label.c_str(),
+                                    Selected))
+                            {
+                                State->TargetSkeletonIndex =
+                                    static_cast<int>(Index);
+                            }
+                            if (Selected)
+                                ImGui::SetItemDefaultFocus();
+                            ImGui::PopID();
+                        }
+                        ImGui::EndCombo();
+                    }
+
+                    ImGui::SeparatorText(
+                        "本批次动画（仅当前源 Profile）");
+                    if (ImGui::SmallButton("全选"))
+                    {
+                        for (const std::size_t Index :
+                             State->CompatibleAnimationIndices)
+                        {
+                            State->BatchSelectedAnimationIds.insert(
+                                State->Catalog.Animations[Index].Id);
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("清空"))
+                    {
+                        State->BatchSelectedAnimationIds.clear();
+                    }
+                    for (const std::size_t Index :
+                         State->CompatibleAnimationIndices)
+                    {
+                        const RetargetAnimationAsset& Animation =
+                            State->Catalog.Animations[Index];
+                        bool Selected =
+                            State->BatchSelectedAnimationIds.contains(
+                                Animation.Id);
+                        ImGui::PushID(
+                            ("batch_animation_" + Animation.Id)
+                                .c_str());
+                        if (ImGui::Checkbox(
+                                Animation.Label.c_str(),
+                                &Selected))
+                        {
+                            if (Selected)
+                            {
+                                State->BatchSelectedAnimationIds
+                                    .insert(Animation.Id);
+                            }
+                            else
+                            {
+                                State->BatchSelectedAnimationIds
+                                    .erase(Animation.Id);
+                            }
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::TextDisabled(
+                        "已选择 %llu / %llu；每段动画保留自己的 FBX、Golden、Stack 与 SHA-256。",
+                        static_cast<unsigned long long>(
+                            State->BatchSelectedAnimationIds.size()),
+                        static_cast<unsigned long long>(
+                            State->CompatibleAnimationIndices.size()));
+                    if (!SourceIsProfile || !TargetIsProfile)
+                    {
+                        ImGui::TextColored(
+                            {1.0F, 0.66F, 0.25F, 1.0F},
+                            "批量 v3 要求源和目标都来自已安装的 .skrtgprofile。");
+                    }
+                }
+                else
+                {
+                    ImGui::TextColored(
+                        {1.0F, 0.45F, 0.45F, 1.0F},
+                        "Profile/Catalog 不可用；UE IK JSON 批处理保持 fail-closed。");
+                }
             }
-            DrawPathRow(
-                "源动画文件夹", "##BatchAnimationDirectory",
-                State->Buffers.BatchAnimationDirectory, State->Browser,
-                BrowseTarget::BatchAnimationDirectory,
-                BrowseSelection::Directory);
+            else
+            {
+                DrawPathRow(
+                    "源角色 T-pose FBX", "##BatchSourceRest",
+                    State->Buffers.SourceRest, State->Browser,
+                    BrowseTarget::SourceRest,
+                    BrowseSelection::FbxFile);
+                DrawPathRow(
+                    "目标角色 T-pose FBX",
+                    "##BatchTargetRest",
+                    State->Buffers.TargetSkeleton, State->Browser,
+                    BrowseTarget::TargetSkeleton,
+                    BrowseSelection::FbxFile);
+                DrawPathRow(
+                    "源动画文件夹",
+                    "##BatchAnimationDirectory",
+                    State->Buffers.BatchAnimationDirectory,
+                    State->Browser,
+                    BrowseTarget::BatchAnimationDirectory,
+                    BrowseSelection::Directory);
+            }
             DrawPathRow(
                 "批量输出文件夹", "##BatchOutputRoot",
                 State->Buffers.BatchOutputRoot, State->Browser,
                 BrowseTarget::BatchOutputRoot,
                 BrowseSelection::Directory);
-            ImGui::Checkbox(
-                "递归扫描子文件夹，并在 FinalFBX 中保留相对目录",
-                &State->BatchRecursive);
+            if (!State->UseUEIKJsonRoute)
+            {
+                ImGui::Checkbox(
+                    "递归扫描子文件夹，并在 FinalFBX 中保留相对目录",
+                    &State->BatchRecursive);
+            }
 
             ImGui::SeparatorText("本批次的 Op Stack");
             ImGui::BeginDisabled(true);

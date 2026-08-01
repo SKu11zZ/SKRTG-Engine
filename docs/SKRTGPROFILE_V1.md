@@ -163,8 +163,16 @@ file, mismatched role, wrong version, wrong animation owner, wrong skeleton
 fingerprint, or changed catalog fails preflight without starting a child
 process.
 
+The batch panel applies the same contract to multiple animations. It shows
+only installed source/target profiles and only catalog clips compatible with
+the selected source. Profile-backed batch request v3 stores the two package
+bindings once and stores each selected clip's ID, owner, FBX and Golden
+bindings, stack, and import modes separately. Every resulting Bridge v5 job is
+preflighted before the batch output directory is created. Execution is fixed
+at `maximumConcurrentJobs=1`.
+
 Animation-only FBX files are supported by the exact UE path without inventing
-a bind pose. If the file contains no Mesh/SkinCluster and no FBX BindPose, the
+a bind pose. If the file contains no Mesh and no FBX BindPose, the
 Worker requires its hash-bound Golden JSON reference hierarchy and every local
 and model rest transform to match the source IK Rig within strict rest
 tolerances. The FBX is still replayed and checked against every Golden key.
@@ -183,9 +191,9 @@ v1 intentionally does not:
 - convert arbitrary FBX coordinate systems;
 - claim UE FullBodyIK parity;
 - select or adopt an algorithm route;
-- change SKRV v1 or let the Viewer recompute retargeting.
-- bind the legacy batch panel to profiles; profile-backed selection is
-  currently the single-job Viewer/Bridge v5 path.
+- change SKRV v1 or let the Viewer recompute retargeting;
+- put animations inside a profile;
+- let profile-backed batch scan arbitrary folders or infer clip ownership.
 
 Adding Manny, Vicon, SMPL, or another character requires one separately
 authored profile plus external animation records bound to the same profile ID
