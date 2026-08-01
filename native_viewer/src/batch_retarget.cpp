@@ -1,0 +1,1144 @@
+#include "skrtg/viewer/batch_retarget.h"
+
+#include "skrtg/viewer/review_scene.h"
+#include "skrtg/viewer/verified_export.h"
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cctype>
+#include <fstream>
+#include <iomanip>
+#include <set>
+#include <sstream>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+namespace skrtg::viewer
+{
+namespace
+{
+constexpr const char* ExternalRequestSchema =
+    "skrtg.native_viewer.batch_retarget_request.v1";
+constexpr const char* UEIKJsonRequestSchema =
+    "skrtg.native_viewer.batch_retarget_request.v2";
+constexpr const char* StatusSchema =
+    "skrtg.native_viewer.batch_retarget_status.v1";
+constexpr const char* ExternalDefinitionKind = "external_foundation_v1";
+constexpr const char* UEIKJsonDefinitionKind = "ue_ik_json_v1";
+constexpr std::size_t MaximumPlannedFiles = 100000;
+
+bool IsRegularFile(const std::filesystem::path& Path)
+{
+    std::error_code Error;
+    return !Path.empty() &&
+        std::filesystem::is_regular_file(Path, Error) && !Error;
+}
+
+bool IsDirectory(const std::filesystem::path& Path)
+{
+    std::error_code Error;
+    return !Path.empty() &&
+        std::filesystem::is_directory(Path, Error) && !Error;
+}
+
+std::string LowerAscii(std::string Value)
+{
+    std::transform(
+        Value.begin(), Value.end(), Value.begin(),
+        [](const unsigned char Character)
+        {
+            return static_cast<char>(std::tolower(Character));
+        });
+    return Value;
+}
+
+bool HasFbxExtension(const std::filesystem::path& Path)
+{
+    return LowerAscii(Path.extension().string()) == ".fbx";
+}
+
+bool HasJsonExtension(const std::filesystem::path& Path)
+{
+    return LowerAscii(Path.extension().string()) == ".json";
+}
+
+std::filesystem::path NormalizedAbsolute(
+    const std::filesystem::path& Path)
+{
+    std::error_code Error;
+    std::filesystem::path Result =
+        std::filesystem::weakly_canonical(Path, Error);
+    if (Error)
+    {
+        Error.clear();
+        Result = std::filesystem::absolute(Path, Error);
+    }
+    return (Error ? Path : Result).lexically_normal();
+}
+
+std::string ComparablePath(const std::filesystem::path& Path)
+{
+    std::string Result = PathToUtf8(NormalizedAbsolute(Path));
+#if defined(_WIN32)
+    Result = LowerAscii(std::move(Result));
+#endif
+    while (Result.size() > 1 && Result.back() == '/') Result.pop_back();
+    return Result;
+}
+
+bool SamePath(
+    const std::filesystem::path& Left,
+    const std::filesystem::path& Right)
+{
+    return !Left.empty() && !Right.empty() &&
+        ComparablePath(Left) == ComparablePath(Right);
+}
+
+bool ResolveForContainment(
+    const std::filesystem::path& Path,
+    std::filesystem::path& OutResolved)
+{
+    std::error_code Error;
+    std::filesystem::path Cursor =
+        std::filesystem::absolute(Path, Error).lexically_normal();
+    if (Error || Cursor.empty()) return false;
+    std::vector<std::filesystem::path> MissingSuffix;
+    for (;;)
+    {
+        const bool Exists = std::filesystem::exists(Cursor, Error);
+        if (Error) return false;
+        if (Exists) break;
+        const std::filesystem::path Parent = Cursor.parent_path();
+        if (Parent.empty() || Parent == Cursor) return false;
+        MissingSuffix.push_back(Cursor.filename());
+        Cursor = Parent;
+    }
+    OutResolved = std::filesystem::canonical(Cursor, Error);
+    if (Error || OutResolved.empty()) return false;
+    for (auto Part = MissingSuffix.rbegin();
+         Part != MissingSuffix.rend(); ++Part)
+    {
+        OutResolved /= *Part;
+    }
+    OutResolved = OutResolved.lexically_normal();
+    return true;
+}
+
+bool IsPathInsideOrEqual(
+    const std::filesystem::path& Candidate,
+    const std::filesystem::path& Root,
+    bool& OutResolved)
+{
+    std::filesystem::path CandidatePath;
+    std::filesystem::path RootPath;
+    OutResolved = ResolveForContainment(Candidate, CandidatePath) &&
+        ResolveForContainment(Root, RootPath);
+    if (!OutResolved) return false;
+    auto CandidatePart = CandidatePath.begin();
+    for (auto RootPart = RootPath.begin(); RootPart != RootPath.end();
+         ++RootPart, ++CandidatePart)
+    {
+        if (CandidatePart == CandidatePath.end()) return false;
+        std::string Left = PathToUtf8(*CandidatePart);
+        std::string Right = PathToUtf8(*RootPart);
+#if defined(_WIN32)
+        Left = LowerAscii(std::move(Left));
+        Right = LowerAscii(std::move(Right));
+#endif
+        if (Left != Right) return false;
+    }
+    return true;
+}
+
+bool DirectoryEmptyOrAbsent(const std::filesystem::path& Path)
+{
+    std::error_code Error;
+    if (!std::filesystem::exists(Path, Error)) return !Error;
+    if (Error || !std::filesystem::is_directory(Path, Error) || Error)
+        return false;
+    return std::filesystem::directory_iterator(Path, Error) ==
+            std::filesystem::directory_iterator() && !Error;
+}
+
+bool CreateUniqueTemporaryText(
+    const std::filesystem::path& Destination,
+    const std::string& Text,
+    std::filesystem::path& OutTemporary,
+    std::string& OutError)
+{
+    static std::atomic<std::uint64_t> Counter{0};
+    const std::uint64_t Tick = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+#if defined(_WIN32)
+    const std::uint64_t ProcessId = GetCurrentProcessId();
+#else
+    const std::uint64_t ProcessId = static_cast<std::uint64_t>(getpid());
+#endif
+    for (std::uint64_t Attempt = 0; Attempt < 32; ++Attempt)
+    {
+        OutTemporary = Destination;
+        OutTemporary += ".tmp." + std::to_string(ProcessId) + "." +
+            std::to_string(Tick) + "." +
+            std::to_string(Counter.fetch_add(1)) + "." +
+            std::to_string(Attempt);
+#if defined(_WIN32)
+        HANDLE File = CreateFileW(
+            OutTemporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+            FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (File == INVALID_HANDLE_VALUE)
+        {
+            const DWORD FileError = GetLastError();
+            if (FileError == ERROR_FILE_EXISTS ||
+                FileError == ERROR_ALREADY_EXISTS)
+            {
+                continue;
+            }
+            OutError = "failed to create exclusive temporary JSON: win32=" +
+                std::to_string(FileError);
+            return false;
+        }
+        bool Success = true;
+        std::size_t Offset = 0;
+        while (Offset < Text.size())
+        {
+            const DWORD Chunk = static_cast<DWORD>(std::min<std::size_t>(
+                Text.size() - Offset, 1U << 30U));
+            DWORD Written = 0;
+            if (!WriteFile(
+                    File, Text.data() + Offset, Chunk, &Written, nullptr) ||
+                Written != Chunk)
+            {
+                Success = false;
+                break;
+            }
+            Offset += Written;
+        }
+        if (Success) Success = FlushFileBuffers(File) != FALSE;
+        const DWORD WriteError = Success ? ERROR_SUCCESS : GetLastError();
+        CloseHandle(File);
+        if (!Success)
+        {
+            std::error_code CleanupError;
+            std::filesystem::remove(OutTemporary, CleanupError);
+            OutError = "failed to write temporary JSON: win32=" +
+                std::to_string(WriteError);
+            return false;
+        }
+#else
+        const int File = open(
+            OutTemporary.c_str(), O_CREAT | O_EXCL | O_WRONLY
+#if defined(O_CLOEXEC)
+                | O_CLOEXEC
+#endif
+#if defined(O_NOFOLLOW)
+                | O_NOFOLLOW
+#endif
+            , 0600);
+        if (File < 0)
+        {
+            if (errno == EEXIST) continue;
+            OutError = std::string(
+                "failed to create exclusive temporary JSON: ") +
+                std::strerror(errno);
+            return false;
+        }
+        bool Success = true;
+        std::size_t Offset = 0;
+        while (Offset < Text.size())
+        {
+            const ssize_t Written = write(
+                File, Text.data() + Offset, Text.size() - Offset);
+            if (Written <= 0)
+            {
+                Success = false;
+                break;
+            }
+            Offset += static_cast<std::size_t>(Written);
+        }
+        const int WriteError = Success ? 0 : errno;
+        close(File);
+        if (!Success)
+        {
+            std::error_code CleanupError;
+            std::filesystem::remove(OutTemporary, CleanupError);
+            OutError = std::string("failed to write temporary JSON: ") +
+                std::strerror(WriteError);
+            return false;
+        }
+#endif
+        return true;
+    }
+    OutError = "failed to allocate a unique temporary JSON path";
+    return false;
+}
+
+bool WriteTextAtomic(
+    const std::filesystem::path& Path,
+    const std::string& Text,
+    std::string& OutError)
+{
+    OutError.clear();
+    std::error_code Error;
+    if (Path.has_parent_path())
+        std::filesystem::create_directories(Path.parent_path(), Error);
+    if (Error)
+    {
+        OutError = "failed to create JSON output directory";
+        return false;
+    }
+    std::filesystem::path Temporary;
+    if (!CreateUniqueTemporaryText(
+            Path, Text, Temporary, OutError))
+        return false;
+#if defined(_WIN32)
+    if (!MoveFileExW(
+            Temporary.c_str(), Path.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        const DWORD MoveError = GetLastError();
+        std::error_code CleanupError;
+        std::filesystem::remove(Temporary, CleanupError);
+        OutError = "failed to atomically commit JSON output: win32=" +
+            std::to_string(MoveError);
+        return false;
+    }
+#else
+    std::filesystem::rename(Temporary, Path, Error);
+    if (Error)
+    {
+        std::error_code CleanupError;
+        std::filesystem::remove(Temporary, CleanupError);
+        OutError = "failed to atomically commit JSON output: " +
+            Error.message();
+        return false;
+    }
+#endif
+    return true;
+}
+
+nlohmann::json CharacterJson(const BatchCharacterInput& Character)
+{
+    nlohmann::json Json = {
+        {"restFbx", PathToUtf8(Character.RestFbx)},
+        {"definitionKind", Character.DefinitionKind},
+        {"definitionFile", PathToUtf8(Character.DefinitionFile)}};
+    if (!Character.AlignmentRetargeterFile.empty())
+    {
+        Json["alignmentRetargeterFile"] =
+            PathToUtf8(Character.AlignmentRetargeterFile);
+    }
+    return Json;
+}
+
+BatchCharacterInput ReadCharacterJson(const nlohmann::json& Json)
+{
+    BatchCharacterInput Result;
+    Result.RestFbx = PathFromUtf8(Json.at("restFbx").get<std::string>());
+    Result.DefinitionKind =
+        Json.at("definitionKind").get<std::string>();
+    Result.DefinitionFile =
+        PathFromUtf8(Json.at("definitionFile").get<std::string>());
+    Result.AlignmentRetargeterFile = PathFromUtf8(
+        Json.value("alignmentRetargeterFile", std::string()));
+    return Result;
+}
+
+nlohmann::json ToolsJson(const RetargetBridgeTools& Tools)
+{
+    nlohmann::json Json = {
+        {"bridgeExecutable", PathToUtf8(Tools.BridgeExecutable)},
+        {"retargeterExecutable", PathToUtf8(Tools.RetargeterExecutable)},
+        {"nodeExecutable", PathToUtf8(Tools.NodeExecutable)},
+        {"adapterScript", PathToUtf8(Tools.AdapterScript)},
+        {"skrvPackExecutable", PathToUtf8(Tools.SkrvPackExecutable)},
+        {"canonicalJson", PathToUtf8(Tools.CanonicalJson)},
+        {"defaultSourceRestFbx", PathToUtf8(Tools.DefaultSourceRestFbx)}};
+    if (!Tools.UEIKRetargeterExecutable.empty())
+    {
+        Json["ueIkRetargeterExecutable"] =
+            PathToUtf8(Tools.UEIKRetargeterExecutable);
+    }
+    return Json;
+}
+
+RetargetBridgeTools ReadToolsJson(const nlohmann::json& Json)
+{
+    RetargetBridgeTools Result;
+    Result.BridgeExecutable = PathFromUtf8(
+        Json.at("bridgeExecutable").get<std::string>());
+    Result.RetargeterExecutable = PathFromUtf8(
+        Json.at("retargeterExecutable").get<std::string>());
+    Result.UEIKRetargeterExecutable = PathFromUtf8(
+        Json.value("ueIkRetargeterExecutable", std::string()));
+    Result.NodeExecutable = PathFromUtf8(
+        Json.at("nodeExecutable").get<std::string>());
+    Result.AdapterScript = PathFromUtf8(
+        Json.at("adapterScript").get<std::string>());
+    Result.SkrvPackExecutable = PathFromUtf8(
+        Json.at("skrvPackExecutable").get<std::string>());
+    Result.CanonicalJson = PathFromUtf8(
+        Json.at("canonicalJson").get<std::string>());
+    Result.DefaultSourceRestFbx = PathFromUtf8(
+        Json.at("defaultSourceRestFbx").get<std::string>());
+    return Result;
+}
+
+nlohmann::json JobJson(const BatchRetargetJob& Job)
+{
+    return {
+        {"index", Job.Index},
+        {"sourceAnimationFbx", PathToUtf8(Job.SourceAnimationFbx)},
+        {"relativeAnimationPath", PathToUtf8(Job.RelativeAnimationPath)},
+        {"jobDirectory", PathToUtf8(Job.JobDirectory)},
+        {"reviewPackage", PathToUtf8(Job.ReviewPackage)},
+        {"finalFbx", PathToUtf8(Job.FinalFbx)},
+        {"clipId", Job.ClipId},
+        {"clipLabel", Job.ClipLabel},
+        {"sourceAnimationSha256", Job.SourceAnimationSha256},
+        {"finalFbxSha256", Job.FinalFbxSha256},
+        {"state", BatchRetargetJobStateName(Job.State)},
+        {"durationSeconds", Job.DurationSeconds},
+        {"errors", Job.Errors}};
+}
+
+BatchRetargetJobState ParseJobState(const std::string& Text)
+{
+    if (Text == "running") return BatchRetargetJobState::Running;
+    if (Text == "succeeded") return BatchRetargetJobState::Succeeded;
+    if (Text == "failed") return BatchRetargetJobState::Failed;
+    return BatchRetargetJobState::Pending;
+}
+
+BatchRetargetJob ReadJobJson(const nlohmann::json& Json)
+{
+    BatchRetargetJob Result;
+    Result.Index = Json.at("index").get<std::size_t>();
+    Result.SourceAnimationFbx = PathFromUtf8(
+        Json.at("sourceAnimationFbx").get<std::string>());
+    Result.RelativeAnimationPath = PathFromUtf8(
+        Json.at("relativeAnimationPath").get<std::string>());
+    Result.JobDirectory = PathFromUtf8(
+        Json.at("jobDirectory").get<std::string>());
+    Result.ReviewPackage = PathFromUtf8(
+        Json.at("reviewPackage").get<std::string>());
+    Result.FinalFbx = PathFromUtf8(
+        Json.at("finalFbx").get<std::string>());
+    Result.ClipId = Json.at("clipId").get<std::string>();
+    Result.ClipLabel = Json.at("clipLabel").get<std::string>();
+    Result.SourceAnimationSha256 =
+        Json.value("sourceAnimationSha256", std::string());
+    Result.FinalFbxSha256 =
+        Json.value("finalFbxSha256", std::string());
+    Result.State = ParseJobState(Json.at("state").get<std::string>());
+    Result.DurationSeconds = Json.at("durationSeconds").get<double>();
+    Result.Errors = Json.at("errors").get<std::vector<std::string>>();
+    return Result;
+}
+
+std::string IndexedJobDirectoryName(
+    const std::size_t Index,
+    const std::string& ClipId)
+{
+    std::ostringstream Stream;
+    Stream << std::setfill('0') << std::setw(6) << (Index + 1) << '_'
+           << ClipId;
+    return Stream.str();
+}
+
+void AddScanEntry(
+    const std::filesystem::directory_entry& Entry,
+    const BatchRetargetRequest& Request,
+    std::vector<std::filesystem::path>& Files,
+    std::vector<std::string>& Warnings)
+{
+    std::error_code Error;
+    if (Entry.is_symlink(Error) && !Error)
+    {
+        if (Warnings.size() < 20)
+            Warnings.push_back("symbolic link skipped: " +
+                               PathToUtf8(Entry.path()));
+        return;
+    }
+    Error.clear();
+    if (!Entry.is_regular_file(Error) || Error ||
+        !HasFbxExtension(Entry.path()))
+    {
+        return;
+    }
+    if (SamePath(Entry.path(), Request.SourceCharacter.RestFbx) ||
+        SamePath(Entry.path(), Request.TargetCharacter.RestFbx))
+    {
+        if (Warnings.size() < 20)
+            Warnings.push_back("selected T-pose excluded from animation scan: " +
+                               PathToUtf8(Entry.path()));
+        return;
+    }
+    Files.push_back(Entry.path().lexically_normal());
+}
+
+std::vector<std::filesystem::path> ScanAnimationFiles(
+    const BatchRetargetRequest& Request,
+    std::vector<std::string>& Errors,
+    std::vector<std::string>& Warnings)
+{
+    std::vector<std::filesystem::path> Files;
+    std::error_code Error;
+    if (Request.Recursive)
+    {
+        std::filesystem::recursive_directory_iterator Iterator(
+            Request.AnimationDirectory,
+            std::filesystem::directory_options::skip_permission_denied,
+            Error);
+        const std::filesystem::recursive_directory_iterator End;
+        while (!Error && Iterator != End)
+        {
+            AddScanEntry(*Iterator, Request, Files, Warnings);
+            if (Files.size() > MaximumPlannedFiles)
+            {
+                Errors.push_back(
+                    "animation folder exceeds the 100000-file safety limit");
+                return {};
+            }
+            Iterator.increment(Error);
+        }
+    }
+    else
+    {
+        std::filesystem::directory_iterator Iterator(
+            Request.AnimationDirectory,
+            std::filesystem::directory_options::skip_permission_denied,
+            Error);
+        const std::filesystem::directory_iterator End;
+        while (!Error && Iterator != End)
+        {
+            AddScanEntry(*Iterator, Request, Files, Warnings);
+            if (Files.size() > MaximumPlannedFiles)
+            {
+                Errors.push_back(
+                    "animation folder exceeds the 100000-file safety limit");
+                return {};
+            }
+            Iterator.increment(Error);
+        }
+    }
+    if (Error)
+        Errors.push_back("failed while scanning animation folder: " +
+                         Error.message());
+    std::sort(
+        Files.begin(), Files.end(),
+        [](const std::filesystem::path& Left,
+           const std::filesystem::path& Right)
+        {
+            return LowerAscii(PathToUtf8(Left)) <
+                LowerAscii(PathToUtf8(Right));
+        });
+    return Files;
+}
+
+void Recount(BatchRetargetStatus& Status)
+{
+    Status.TotalJobs = Status.Jobs.size();
+    Status.CompletedJobs = 0;
+    Status.SucceededJobs = 0;
+    Status.FailedJobs = 0;
+    for (const BatchRetargetJob& Job : Status.Jobs)
+    {
+        if (Job.State == BatchRetargetJobState::Succeeded)
+        {
+            ++Status.CompletedJobs;
+            ++Status.SucceededJobs;
+        }
+        else if (Job.State == BatchRetargetJobState::Failed)
+        {
+            ++Status.CompletedJobs;
+            ++Status.FailedJobs;
+        }
+    }
+}
+} // namespace
+
+const char* BatchRetargetJobStateName(const BatchRetargetJobState State)
+{
+    switch (State)
+    {
+    case BatchRetargetJobState::Pending: return "pending";
+    case BatchRetargetJobState::Running: return "running";
+    case BatchRetargetJobState::Succeeded: return "succeeded";
+    case BatchRetargetJobState::Failed: return "failed";
+    }
+    return "pending";
+}
+
+std::filesystem::path DiscoverBatchRetargetExecutable(
+    const std::filesystem::path& ViewerExecutable)
+{
+    const std::filesystem::path Directory =
+        std::filesystem::absolute(ViewerExecutable).parent_path();
+#if defined(_WIN32)
+    constexpr const char* Name = "skrtg_batch_retarget.exe";
+#else
+    constexpr const char* Name = "skrtg_batch_retarget";
+#endif
+    for (const std::filesystem::path& Candidate : {
+             Directory / Name, Directory / "tools" / Name})
+    {
+        if (IsRegularFile(Candidate)) return Candidate.lexically_normal();
+    }
+    return {};
+}
+
+BatchRetargetPlan BuildBatchRetargetPlan(
+    const BatchRetargetRequest& Request)
+{
+    BatchRetargetPlan Result;
+    if (!IsRegularFile(Request.SourceCharacter.RestFbx) ||
+        !HasFbxExtension(Request.SourceCharacter.RestFbx))
+    {
+        Result.Errors.push_back("source T-pose must be a readable .fbx file");
+    }
+    if (!IsRegularFile(Request.TargetCharacter.RestFbx) ||
+        !HasFbxExtension(Request.TargetCharacter.RestFbx))
+    {
+        Result.Errors.push_back("target T-pose must be a readable .fbx file");
+    }
+    const bool ExternalRoute =
+        Request.SourceCharacter.DefinitionKind == ExternalDefinitionKind &&
+        Request.TargetCharacter.DefinitionKind == ExternalDefinitionKind;
+    const bool UEIKJsonRoute =
+        Request.SourceCharacter.DefinitionKind == UEIKJsonDefinitionKind &&
+        Request.TargetCharacter.DefinitionKind == UEIKJsonDefinitionKind;
+    if (!ExternalRoute && !UEIKJsonRoute)
+    {
+        Result.Errors.push_back(
+            "source and target character definitions must select the "
+            "same supported route: external_foundation_v1 or "
+            "ue_ik_json_v1");
+    }
+    else if (ExternalRoute &&
+             (!Request.SourceCharacter.DefinitionFile.empty() ||
+              !Request.TargetCharacter.DefinitionFile.empty() ||
+              !Request.SourceCharacter.AlignmentRetargeterFile.empty() ||
+              !Request.TargetCharacter.AlignmentRetargeterFile.empty()))
+    {
+        Result.Errors.push_back(
+            "external_foundation_v1 does not accept character definition "
+            "files");
+    }
+    else if (UEIKJsonRoute)
+    {
+        for (const auto& [Path, Label] :
+             std::vector<std::pair<std::filesystem::path, const char*>>{
+                 {Request.SourceCharacter.DefinitionFile,
+                  "source IK Rig JSON"},
+                 {Request.TargetCharacter.DefinitionFile,
+                  "target IK Rig JSON"},
+                 {Request.SourceCharacter.AlignmentRetargeterFile,
+                  "source alignment IK Retargeter JSON"},
+                 {Request.TargetCharacter.AlignmentRetargeterFile,
+                  "target alignment IK Retargeter JSON"}})
+        {
+            if (!IsRegularFile(Path) || !HasJsonExtension(Path))
+            {
+                Result.Errors.push_back(
+                    std::string(Label) +
+                    " must be a readable exported .json file");
+            }
+        }
+    }
+    if (!IsDirectory(Request.AnimationDirectory))
+        Result.Errors.push_back("animation input folder is not readable");
+    if (Request.OutputDirectory.empty())
+        Result.Errors.push_back("batch output directory is empty");
+    else if (!DirectoryEmptyOrAbsent(Request.OutputDirectory))
+        Result.Errors.push_back(
+            "batch output directory must be absent or empty (fail-closed overwrite policy)");
+    bool OutputInInputResolved = true;
+    bool InputInOutputResolved = true;
+    const bool OutputInInput =
+        !Request.AnimationDirectory.empty() &&
+        !Request.OutputDirectory.empty() &&
+        IsPathInsideOrEqual(
+            Request.OutputDirectory, Request.AnimationDirectory,
+            OutputInInputResolved);
+    const bool InputInOutput =
+        !Request.AnimationDirectory.empty() &&
+        !Request.OutputDirectory.empty() &&
+        IsPathInsideOrEqual(
+            Request.AnimationDirectory, Request.OutputDirectory,
+            InputInOutputResolved);
+    if (!OutputInInputResolved || !InputInOutputResolved)
+    {
+        Result.Errors.push_back(
+            "animation input and batch output paths could not be securely resolved");
+    }
+    else if (OutputInInput || InputInOutput)
+    {
+        Result.Errors.push_back(
+            "animation input and batch output directories may not overlap");
+    }
+    if (UEIKJsonRoute &&
+        (Request.EnableSpinePelvisFollow ||
+         Request.EnableSourceMotionFootLock))
+    {
+        Result.Errors.push_back(
+            "UE IK JSON candidate batch route does not enable the "
+            "frozen Spine/Pelvis or FootLock modules");
+    }
+    else if (Request.EnableSourceMotionFootLock &&
+             !Request.EnableSpinePelvisFollow)
+    {
+        Result.Errors.push_back(
+            "frozen FootLock batch route requires the frozen Spine/Pelvis prerequisite");
+    }
+    if (!Result.Errors.empty()) return Result;
+
+    const std::vector<std::filesystem::path> Files =
+        ScanAnimationFiles(Request, Result.Errors, Result.Warnings);
+    if (!Result.Errors.empty()) return Result;
+    if (Files.empty())
+    {
+        Result.Errors.push_back("animation input folder contains no .fbx files");
+        return Result;
+    }
+
+    std::set<std::string> PlannedFinalPaths;
+    Result.Jobs.reserve(Files.size());
+    for (std::size_t Index = 0; Index < Files.size(); ++Index)
+    {
+        BatchRetargetJob Job;
+        Job.Index = Index;
+        Job.SourceAnimationFbx = Files[Index];
+        std::error_code RelativeError;
+        Job.RelativeAnimationPath = std::filesystem::relative(
+            Files[Index], Request.AnimationDirectory, RelativeError);
+        if (RelativeError || Job.RelativeAnimationPath.empty())
+        {
+            Result.Errors.push_back(
+                "failed to make animation path relative to the selected folder: " +
+                PathToUtf8(Files[Index]));
+            continue;
+        }
+        Job.ClipId = MakeBridgeClipId(Files[Index]);
+        Job.ClipLabel = PathToUtf8(Files[Index].stem());
+        Job.JobDirectory = Request.OutputDirectory / "Jobs" /
+            IndexedJobDirectoryName(Index, Job.ClipId);
+        Job.ReviewPackage = Job.JobDirectory / "review.skrv";
+        Job.FinalFbx = Request.OutputDirectory / "FinalFBX" /
+            Job.RelativeAnimationPath.parent_path() /
+            (PathToUtf8(Files[Index].stem()) + "__SKRTG_Final.fbx");
+        if (!PlannedFinalPaths.insert(ComparablePath(Job.FinalFbx)).second)
+        {
+            Result.Errors.push_back(
+                "multiple source animations map to the same Final FBX path: " +
+                PathToUtf8(Job.FinalFbx));
+        }
+        Result.Jobs.push_back(std::move(Job));
+    }
+    if (!Result.Errors.empty()) return Result;
+
+    RetargetBridgeRequest First;
+    First.RouteKind = UEIKJsonRoute
+        ? RetargetBridgeRouteKind::UEIKJsonV1
+        : RetargetBridgeRouteKind::ExternalFoundationV1;
+    First.SourceAnimationFbx = Result.Jobs.front().SourceAnimationFbx;
+    First.SourceRestFbx = Request.SourceCharacter.RestFbx;
+    First.TargetSkeletonFbx = Request.TargetCharacter.RestFbx;
+    First.OutputDirectory = Result.Jobs.front().JobDirectory;
+    First.Tools = Request.Tools;
+    First.ClipId = Result.Jobs.front().ClipId;
+    First.ClipLabel = Result.Jobs.front().ClipLabel;
+    First.AnimationStack = Request.AnimationStack;
+    First.SourceRigJson = Request.SourceCharacter.DefinitionFile;
+    First.TargetRigJson = Request.TargetCharacter.DefinitionFile;
+    First.SourceAlignmentRetargeterJson =
+        Request.SourceCharacter.AlignmentRetargeterFile;
+    First.TargetAlignmentRetargeterJson =
+        Request.TargetCharacter.AlignmentRetargeterFile;
+    First.EnableSpinePelvisFollow = Request.EnableSpinePelvisFollow;
+    First.EnableSourceMotionFootLock = Request.EnableSourceMotionFootLock;
+    const RetargetBridgePreflight Foundation =
+        PreflightRetargetBridge(First);
+    Result.Errors.insert(
+        Result.Errors.end(), Foundation.Errors.begin(),
+        Foundation.Errors.end());
+    Result.Warnings.insert(
+        Result.Warnings.end(), Foundation.Warnings.begin(),
+        Foundation.Warnings.end());
+    Result.Warnings.push_back(
+        "low-memory streaming policy is fixed at one active animation; "
+        "each Retargeter worker exits before the next job starts");
+    Result.Success = Result.Errors.empty();
+    return Result;
+}
+
+bool WriteBatchRetargetRequest(
+    const BatchRetargetRequest& Request,
+    const std::filesystem::path& OutputJson,
+    std::string& OutError)
+{
+    const bool UEIKJson =
+        Request.SourceCharacter.DefinitionKind == UEIKJsonDefinitionKind;
+    const nlohmann::json Json = {
+        {"schema", UEIKJson
+            ? UEIKJsonRequestSchema
+            : ExternalRequestSchema},
+        {"sourceCharacter", CharacterJson(Request.SourceCharacter)},
+        {"targetCharacter", CharacterJson(Request.TargetCharacter)},
+        {"animationDirectory", PathToUtf8(Request.AnimationDirectory)},
+        {"outputDirectory", PathToUtf8(Request.OutputDirectory)},
+        {"recursive", Request.Recursive},
+        {"animationStack", Request.AnimationStack},
+        {"enableSpinePelvisFollow", Request.EnableSpinePelvisFollow},
+        {"enableSourceMotionFootLock", Request.EnableSourceMotionFootLock},
+        {"executionPolicy", {
+            {"maximumConcurrentJobs", 1},
+            {"mode", "streaming_one_animation_per_worker"},
+            {"continueAfterJobFailure", true}}},
+        {"tools", ToolsJson(Request.Tools)}};
+    return WriteTextAtomic(OutputJson, Json.dump(2) + "\n", OutError);
+}
+
+bool ReadBatchRetargetRequest(
+    const std::filesystem::path& InputJson,
+    BatchRetargetRequest& OutRequest,
+    std::string& OutError)
+{
+    OutError.clear();
+    try
+    {
+        std::ifstream Stream(InputJson, std::ios::binary);
+        if (!Stream)
+        {
+            OutError = "failed to open batch retarget request";
+            return false;
+        }
+        const nlohmann::json Json = nlohmann::json::parse(Stream);
+        const std::string Schema =
+            Json.at("schema").get<std::string>();
+        if (Schema != ExternalRequestSchema &&
+            Schema != UEIKJsonRequestSchema)
+        {
+            OutError = "unsupported batch retarget request schema";
+            return false;
+        }
+        const nlohmann::json& Execution = Json.at("executionPolicy");
+        if (Execution.at("maximumConcurrentJobs").get<std::size_t>() != 1 ||
+            Execution.at("mode").get<std::string>() !=
+                "streaming_one_animation_per_worker" ||
+            !Execution.at("continueAfterJobFailure").get<bool>())
+        {
+            OutError =
+                "batch request violates the fixed serial execution policy";
+            return false;
+        }
+        OutRequest.SourceCharacter =
+            ReadCharacterJson(Json.at("sourceCharacter"));
+        OutRequest.TargetCharacter =
+            ReadCharacterJson(Json.at("targetCharacter"));
+        OutRequest.AnimationDirectory = PathFromUtf8(
+            Json.at("animationDirectory").get<std::string>());
+        OutRequest.OutputDirectory = PathFromUtf8(
+            Json.at("outputDirectory").get<std::string>());
+        OutRequest.Recursive = Json.at("recursive").get<bool>();
+        OutRequest.AnimationStack =
+            Json.value("animationStack", std::string());
+        OutRequest.EnableSpinePelvisFollow =
+            Json.at("enableSpinePelvisFollow").get<bool>();
+        OutRequest.EnableSourceMotionFootLock =
+            Json.at("enableSourceMotionFootLock").get<bool>();
+        OutRequest.Tools = ReadToolsJson(Json.at("tools"));
+        return true;
+    }
+    catch (const std::exception& Error)
+    {
+        OutError = std::string("invalid batch retarget request: ") +
+            Error.what();
+        return false;
+    }
+}
+
+bool WriteBatchRetargetStatus(
+    const BatchRetargetStatus& Status,
+    const std::filesystem::path& OutputJson,
+    std::string& OutError)
+{
+    nlohmann::json Jobs = nlohmann::json::array();
+    for (const BatchRetargetJob& Job : Status.Jobs)
+        Jobs.push_back(JobJson(Job));
+    const nlohmann::json Json = {
+        {"schema", StatusSchema},
+        {"running", Status.Running},
+        {"complete", Status.Complete},
+        {"success", Status.Success},
+        {"cancelled", Status.Cancelled},
+        {"executionPolicy", {
+            {"maximumConcurrentJobs", Status.MaximumConcurrentJobs},
+            {"mode", "streaming_one_animation_per_worker"},
+            {"continueAfterJobFailure", true}}},
+        {"counts", {
+            {"total", Status.TotalJobs},
+            {"completed", Status.CompletedJobs},
+            {"succeeded", Status.SucceededJobs},
+            {"failed", Status.FailedJobs}}},
+        {"activeJobIndex", Status.HasActiveJob
+            ? nlohmann::json(Status.ActiveJobIndex)
+            : nlohmann::json(nullptr)},
+        {"durationSeconds", Status.DurationSeconds},
+        {"sourceCharacter", CharacterJson(Status.SourceCharacter)},
+        {"targetCharacter", CharacterJson(Status.TargetCharacter)},
+        {"animationDirectory", PathToUtf8(Status.AnimationDirectory)},
+        {"outputDirectory", PathToUtf8(Status.OutputDirectory)},
+        {"recursive", Status.Recursive},
+        {"animationStack", Status.AnimationStack},
+        {"enableSpinePelvisFollow", Status.EnableSpinePelvisFollow},
+        {"enableSourceMotionFootLock", Status.EnableSourceMotionFootLock},
+        {"foundationFrozen",
+         Status.SourceCharacter.DefinitionKind == ExternalDefinitionKind},
+        {"skrvV1Modified", false},
+        {"xmlDefinitionParsingEnabled", false},
+        {"jobs", std::move(Jobs)},
+        {"errors", Status.Errors}};
+    return WriteTextAtomic(OutputJson, Json.dump(2) + "\n", OutError);
+}
+
+bool ReadBatchRetargetStatus(
+    const std::filesystem::path& InputJson,
+    BatchRetargetStatus& OutStatus,
+    std::string& OutError)
+{
+    OutError.clear();
+    try
+    {
+        std::ifstream Stream(InputJson, std::ios::binary);
+        if (!Stream)
+        {
+            OutError = "failed to open batch retarget status";
+            return false;
+        }
+        const nlohmann::json Json = nlohmann::json::parse(Stream);
+        if (Json.at("schema").get<std::string>() != StatusSchema)
+        {
+            OutError = "unsupported batch retarget status schema";
+            return false;
+        }
+        OutStatus = {};
+        OutStatus.Running = Json.at("running").get<bool>();
+        OutStatus.Complete = Json.at("complete").get<bool>();
+        OutStatus.Success = Json.at("success").get<bool>();
+        OutStatus.Cancelled = Json.value("cancelled", false);
+        OutStatus.MaximumConcurrentJobs = Json.at("executionPolicy")
+            .at("maximumConcurrentJobs").get<std::size_t>();
+        OutStatus.TotalJobs = Json.at("counts").at("total").get<std::size_t>();
+        OutStatus.CompletedJobs = Json.at("counts")
+            .at("completed").get<std::size_t>();
+        OutStatus.SucceededJobs = Json.at("counts")
+            .at("succeeded").get<std::size_t>();
+        OutStatus.FailedJobs = Json.at("counts")
+            .at("failed").get<std::size_t>();
+        if (!Json.at("activeJobIndex").is_null())
+        {
+            OutStatus.HasActiveJob = true;
+            OutStatus.ActiveJobIndex =
+                Json.at("activeJobIndex").get<std::size_t>();
+        }
+        OutStatus.DurationSeconds =
+            Json.at("durationSeconds").get<double>();
+        OutStatus.SourceCharacter =
+            ReadCharacterJson(Json.at("sourceCharacter"));
+        OutStatus.TargetCharacter =
+            ReadCharacterJson(Json.at("targetCharacter"));
+        OutStatus.AnimationDirectory = PathFromUtf8(
+            Json.at("animationDirectory").get<std::string>());
+        OutStatus.OutputDirectory = PathFromUtf8(
+            Json.at("outputDirectory").get<std::string>());
+        OutStatus.Recursive = Json.at("recursive").get<bool>();
+        OutStatus.AnimationStack =
+            Json.value("animationStack", std::string());
+        OutStatus.EnableSpinePelvisFollow =
+            Json.at("enableSpinePelvisFollow").get<bool>();
+        OutStatus.EnableSourceMotionFootLock =
+            Json.at("enableSourceMotionFootLock").get<bool>();
+        for (const nlohmann::json& Job : Json.at("jobs"))
+            OutStatus.Jobs.push_back(ReadJobJson(Job));
+        OutStatus.Errors = Json.at("errors").get<std::vector<std::string>>();
+        return true;
+    }
+    catch (const std::exception& Error)
+    {
+        OutError = std::string("invalid batch retarget status: ") +
+            Error.what();
+        return false;
+    }
+}
+
+BatchRetargetRunResult RunBatchRetarget(
+    const BatchRetargetRequest& Request)
+{
+    BatchRetargetRunResult Result;
+    Result.StatusJson = Request.OutputDirectory / "batch_status.json";
+    const BatchRetargetPlan Plan = BuildBatchRetargetPlan(Request);
+    if (!Plan.Success)
+    {
+        Result.Errors = Plan.Errors;
+        return Result;
+    }
+
+    std::error_code DirectoryError;
+    std::filesystem::create_directories(
+        Request.OutputDirectory / "Jobs", DirectoryError);
+    if (!DirectoryError)
+        std::filesystem::create_directories(
+            Request.OutputDirectory / "FinalFBX", DirectoryError);
+    if (DirectoryError)
+    {
+        Result.Errors.push_back("failed to create batch output directories");
+        return Result;
+    }
+
+    BatchRetargetStatus Status;
+    Status.Running = true;
+    Status.MaximumConcurrentJobs = 1;
+    Status.SourceCharacter = Request.SourceCharacter;
+    Status.TargetCharacter = Request.TargetCharacter;
+    Status.AnimationDirectory = Request.AnimationDirectory;
+    Status.OutputDirectory = Request.OutputDirectory;
+    Status.Recursive = Request.Recursive;
+    Status.AnimationStack = Request.AnimationStack;
+    Status.EnableSpinePelvisFollow = Request.EnableSpinePelvisFollow;
+    Status.EnableSourceMotionFootLock = Request.EnableSourceMotionFootLock;
+    Status.Jobs = Plan.Jobs;
+    Recount(Status);
+    const auto BatchStart = std::chrono::steady_clock::now();
+    std::string StatusError;
+    if (!WriteBatchRetargetStatus(Status, Result.StatusJson, StatusError))
+    {
+        Result.Errors.push_back(StatusError);
+        return Result;
+    }
+
+    bool StatusWriteFailed = false;
+    for (std::size_t Index = 0; Index < Status.Jobs.size(); ++Index)
+    {
+        BatchRetargetJob& Job = Status.Jobs[Index];
+        Job.State = BatchRetargetJobState::Running;
+        Status.HasActiveJob = true;
+        Status.ActiveJobIndex = Index;
+        Status.DurationSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - BatchStart).count();
+        if (!WriteBatchRetargetStatus(
+                Status, Result.StatusJson, StatusError))
+        {
+            Result.Errors.push_back(StatusError);
+            StatusWriteFailed = true;
+            break;
+        }
+
+        const auto JobStart = std::chrono::steady_clock::now();
+        RetargetBridgeRequest Single;
+        Single.RouteKind =
+            Request.SourceCharacter.DefinitionKind ==
+                    UEIKJsonDefinitionKind
+                ? RetargetBridgeRouteKind::UEIKJsonV1
+                : RetargetBridgeRouteKind::ExternalFoundationV1;
+        Single.SourceAnimationFbx = Job.SourceAnimationFbx;
+        Single.TargetSkeletonFbx = Request.TargetCharacter.RestFbx;
+        Single.SourceRestFbx = Request.SourceCharacter.RestFbx;
+        Single.OutputDirectory = Job.JobDirectory;
+        Single.Tools = Request.Tools;
+        Single.ClipId = Job.ClipId;
+        Single.ClipLabel = Job.ClipLabel;
+        Single.AnimationStack = Request.AnimationStack;
+        Single.SourceRigJson =
+            Request.SourceCharacter.DefinitionFile;
+        Single.TargetRigJson =
+            Request.TargetCharacter.DefinitionFile;
+        Single.SourceAlignmentRetargeterJson =
+            Request.SourceCharacter.AlignmentRetargeterFile;
+        Single.TargetAlignmentRetargeterJson =
+            Request.TargetCharacter.AlignmentRetargeterFile;
+        Single.EnableSpinePelvisFollow = Request.EnableSpinePelvisFollow;
+        Single.EnableSourceMotionFootLock =
+            Request.EnableSourceMotionFootLock;
+
+        const RetargetBridgeRunResult Bridge = RunRetargetBridge(Single);
+        Job.SourceAnimationSha256 = Bridge.SourceAnimationSha256;
+        if (!Bridge.Success)
+        {
+            Job.Errors = Bridge.Errors;
+        }
+        else
+        {
+            const ReviewExportResult Export = FindVerifiedReviewExport(
+                Bridge.ReviewPackage, Job.ClipId, "final");
+            if (!Export.Success)
+            {
+                Job.Errors = Export.Errors;
+            }
+            else
+            {
+                const VerifiedExportCopyResult Copy = CopyVerifiedExport({
+                    Export.SourceFbx,
+                    Job.FinalFbx,
+                    Bridge.ReviewPackage,
+                    Export.ExpectedSha256,
+                    false});
+                if (!Copy.Success) Job.Errors = Copy.Errors;
+                else Job.FinalFbxSha256 = Export.ExpectedSha256;
+            }
+        }
+        Job.DurationSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - JobStart).count();
+        Job.State = Job.Errors.empty()
+            ? BatchRetargetJobState::Succeeded
+            : BatchRetargetJobState::Failed;
+        Status.HasActiveJob = false;
+        Recount(Status);
+        Status.DurationSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - BatchStart).count();
+        if (!WriteBatchRetargetStatus(
+                Status, Result.StatusJson, StatusError))
+        {
+            Result.Errors.push_back(StatusError);
+            StatusWriteFailed = true;
+            break;
+        }
+    }
+
+    Status.HasActiveJob = false;
+    Status.Running = false;
+    Status.Complete = !StatusWriteFailed &&
+        Status.CompletedJobs == Status.TotalJobs;
+    Status.Success = Status.Complete && Status.FailedJobs == 0;
+    Status.DurationSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - BatchStart).count();
+    Status.Errors.insert(
+        Status.Errors.end(), Result.Errors.begin(), Result.Errors.end());
+    if (!WriteBatchRetargetStatus(Status, Result.StatusJson, StatusError))
+    {
+        Result.Errors.push_back(StatusError);
+        Status.Success = false;
+    }
+    Result.Status = std::move(Status);
+    Result.Success = Result.Status.Success;
+    if (!Result.Success && Result.Errors.empty() &&
+        Result.Status.FailedJobs > 0)
+    {
+        Result.Errors.push_back(
+            "one or more animations failed; inspect batch_status.json and per-job logs");
+    }
+    return Result;
+}
+
+} // namespace skrtg::viewer

@@ -1,0 +1,46 @@
+# Local builds and IDE state
+/build/
+/out/
+/dist/
+/.vs/
+/.vscode/
+/CMakeUserPresets.json
+
+# Runtime/private catalogs
+/runtime_data/
+/data/
+/**/retarget_catalog/
+
+# Character, animation, engine-project, and review assets
+*.fbx
+*.uasset
+*.umap
+*.uproject
+*.skrv
+*.animgolden.json
+*.ikrig.json
+*.ikretargeter.json
+*.blend
+*.bvh
+
+# Compiled packages and debug artifacts
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.zip
+*.7z
+
+# Captures and generated evidence
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.mov
+/Audit/
+/Samples/
+/Exports/
+/Runs/
