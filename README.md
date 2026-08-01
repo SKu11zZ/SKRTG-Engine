@@ -148,3 +148,5 @@ only into the local build output; it is ignored by Git.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the runtime flow and
 [docs/ASSET_POLICY.md](docs/ASSET_POLICY.md) for repository boundaries.
+See [docs/NON_VICON_MATRIX_V1.md](docs/NON_VICON_MATRIX_V1.md) for the
+four-profile private-corpus validation scope and its evidence limits.
