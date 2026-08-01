@@ -1,9 +1,12 @@
 #pragma once
 
+#include "skrtg/viewer/batch_retarget.h"
+
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace skrtg::viewer
 {
@@ -32,6 +35,9 @@ public:
     bool IsOpen() const;
     bool IsRunning() const;
     int CompletedRunCount() const;
+    std::vector<BatchReviewAnimation>
+        ReviewableBatchAnimations() const;
+    void SetSelectedBatchReviewJobIndex(std::size_t JobIndex);
     std::optional<std::filesystem::path> ConsumeCompletedPackage();
     std::optional<std::filesystem::path> ConsumeRequestedPackage();
     bool SpinePelvisFollowEnabled() const;

@@ -537,6 +537,35 @@ void TestProfileBoundBridge()
                   Golden,
           "profile-backed status v2 must retain package and per-job "
           "Golden provenance");
+    StatusRoundTrip.Jobs[0].State =
+        BatchRetargetJobState::Succeeded;
+    StatusRoundTrip.Jobs[1].State =
+        BatchRetargetJobState::Failed;
+    std::vector<BatchReviewAnimation> ReviewAnimations =
+        BuildBatchReviewAnimationList(StatusRoundTrip);
+    Check(ReviewAnimations.size() == 1 &&
+              ReviewAnimations[0].Id == "source_clip" &&
+              ReviewAnimations[0].Label == "Source Clip" &&
+              ReviewAnimations[0].ReviewPackage ==
+                  StatusRoundTrip.Jobs[0].ReviewPackage,
+          "Viewer animation list must expose only successful batch "
+          "packages with their catalog identity");
+    StatusRoundTrip.Jobs[1].State =
+        BatchRetargetJobState::Succeeded;
+    ReviewAnimations =
+        BuildBatchReviewAnimationList(StatusRoundTrip);
+    Check(ReviewAnimations.size() == 2 &&
+              ReviewAnimations[0].Id == "source_clip" &&
+              ReviewAnimations[1].Id == "source_clip_two",
+          "Viewer animation list must preserve deterministic batch "
+          "job order");
+    StatusRoundTrip.Jobs[0].ReviewPackage.clear();
+    ReviewAnimations =
+        BuildBatchReviewAnimationList(StatusRoundTrip);
+    Check(ReviewAnimations.size() == 1 &&
+              ReviewAnimations[0].Id == "source_clip_two",
+          "Viewer animation list must omit a successful status entry "
+          "that has no review package path");
     Json SelectedStatusJson =
         Json::parse(Read(BatchStatusFile));
     SelectedStatusJson["candidateRouteSelected"] = true;

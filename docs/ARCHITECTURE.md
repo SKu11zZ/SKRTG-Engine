@@ -80,7 +80,10 @@ The Viewer presents four synchronized lanes:
 
 All lanes share clip, frame, camera, projection, and scale. The Viewer can
 switch only between results already present in SKRV; it cannot alter the
-retarget solve.
+retarget solve. Successful batch jobs are presented as a session animation
+playlist. Each entry still points to its own SKRV, and changing the selected
+animation repeats strict package validation before resetting playback and the
+synchronized four-view state.
 
 ## Failure policy
 

@@ -169,7 +169,9 @@ the selected source. Profile-backed batch request v3 stores the two package
 bindings once and stores each selected clip's ID, owner, FBX and Golden
 bindings, stack, and import modes separately. Every resulting Bridge v5 job is
 preflighted before the batch output directory is created. Execution is fixed
-at `maximumConcurrentJobs=1`.
+at `maximumConcurrentJobs=1`. Successful jobs are exposed in the Viewer as an
+animation selector while remaining independent, strictly revalidated SKRV
+packages.
 
 Animation-only FBX files are supported by the exact UE path without inventing
 a bind pose. If the file contains no Mesh and no FBX BindPose, the

@@ -123,6 +123,17 @@ struct BatchRetargetStatus
     std::vector<std::string> Errors;
 };
 
+// Every profile-backed batch job produces an independently verified SKRV.
+// This lightweight projection lets the Viewer present those packages as one
+// animation playlist without weakening the one-package-per-clip contract.
+struct BatchReviewAnimation
+{
+    std::size_t JobIndex = 0;
+    std::string Id;
+    std::string Label;
+    std::filesystem::path ReviewPackage;
+};
+
 struct BatchRetargetRunResult
 {
     bool Success = false;
@@ -156,6 +167,9 @@ bool ReadBatchRetargetStatus(
     const std::filesystem::path& InputJson,
     BatchRetargetStatus& OutStatus,
     std::string& OutError);
+
+std::vector<BatchReviewAnimation> BuildBatchReviewAnimationList(
+    const BatchRetargetStatus& Status);
 
 BatchRetargetRunResult RunBatchRetarget(
     const BatchRetargetRequest& Request);

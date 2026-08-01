@@ -1506,6 +1506,35 @@ bool ReadBatchRetargetStatus(
     }
 }
 
+std::vector<BatchReviewAnimation> BuildBatchReviewAnimationList(
+    const BatchRetargetStatus& Status)
+{
+    std::vector<BatchReviewAnimation> Result;
+    Result.reserve(std::min(
+        Status.SucceededJobs, Status.Jobs.size()));
+    for (const BatchRetargetJob& Job : Status.Jobs)
+    {
+        if (Job.State != BatchRetargetJobState::Succeeded ||
+            Job.ReviewPackage.empty())
+        {
+            continue;
+        }
+
+        BatchReviewAnimation Animation;
+        Animation.JobIndex = Job.Index;
+        Animation.Id = !Job.SourceAnimationId.empty()
+            ? Job.SourceAnimationId : Job.ClipId;
+        Animation.Label = !Job.ClipLabel.empty()
+            ? Job.ClipLabel
+            : PathToUtf8(Job.RelativeAnimationPath.stem());
+        Animation.ReviewPackage = Job.ReviewPackage;
+        if (Animation.Id.empty() || Animation.Label.empty())
+            continue;
+        Result.push_back(std::move(Animation));
+    }
+    return Result;
+}
+
 BatchRetargetRunResult RunBatchRetarget(
     const BatchRetargetRequest& Request)
 {

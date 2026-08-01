@@ -70,7 +70,11 @@ and independently re-verifies both packages before starting the Worker.
 The batch panel uses the same installed profiles and catalog filtering. Its
 profile-backed v3 request expands every selected animation into an independent
 Bridge v5 job, preflights the complete selection before creating output, and
-runs one Worker at a time.
+runs one Worker at a time. Successful jobs appear in both the batch-result
+panel and the native Viewer's `动画` selector as one review playlist. Choosing
+another animation opens its independent SKRV, repeats strict package
+validation, pauses playback, and resets the frame to zero with the new clip's
+timing.
 
 See [docs/SKRTGPROFILE_V1.md](docs/SKRTGPROFILE_V1.md) for the exact contract.
 See [docs/PROFILE_BATCH_V3.md](docs/PROFILE_BATCH_V3.md) for the batch request,
@@ -134,6 +138,9 @@ only into the local build output; it is ignored by Git.
 - Batch execution is serial by design. All selected profile-backed jobs pass
   package, catalog, animation, Golden, and resource-hash preflight before the
   output directory is created.
+- Multiple batch results remain one verified SKRV per animation. The Viewer
+  presents them through a session playlist; it does not merge packages or
+  bypass SKRV validation when switching.
 - Legacy batch request v1/v2 remains readable for compatibility, but it does
   not gain profile provenance.
 - Material, texture, morph-target, portable runtime, and cross-platform

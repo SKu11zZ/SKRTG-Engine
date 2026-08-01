@@ -1183,6 +1183,7 @@ struct RetargetBridgeUi::Impl
         }
         LastBatchStatus = {};
         HasBatchStatus = false;
+        SelectedBatchReviewJobIndex.reset();
         BatchStatusReadError.clear();
         ActiveRun = ActiveRunKind::Batch;
         NextBatchStatusPoll = std::chrono::steady_clock::now();
@@ -1300,6 +1301,7 @@ struct RetargetBridgeUi::Impl
     BatchRetargetPlan LastBatchPlan;
     BatchRetargetStatus LastBatchStatus;
     bool HasBatchStatus = false;
+    std::optional<std::size_t> SelectedBatchReviewJobIndex;
     std::string BatchStatusReadError;
     std::filesystem::path ActiveBatchRequestJson;
     std::filesystem::path ActiveBatchLauncherLog;
@@ -2192,25 +2194,67 @@ void RetargetBridgeUi::Draw()
                     Status.DurationSeconds,
                     Status.MaximumConcurrentJobs);
 
-                const BatchRetargetJob* LastSucceeded = nullptr;
-                for (auto Iterator = Status.Jobs.rbegin();
-                     Iterator != Status.Jobs.rend(); ++Iterator)
+                const std::vector<BatchReviewAnimation>
+                    ReviewAnimations =
+                        BuildBatchReviewAnimationList(Status);
+                const BatchReviewAnimation* SelectedAnimation = nullptr;
+                for (const BatchReviewAnimation& Animation :
+                     ReviewAnimations)
                 {
-                    if (Iterator->State ==
-                        BatchRetargetJobState::Succeeded)
+                    if (State->SelectedBatchReviewJobIndex.has_value() &&
+                        Animation.JobIndex ==
+                            *State->SelectedBatchReviewJobIndex)
                     {
-                        LastSucceeded = &*Iterator;
+                        SelectedAnimation = &Animation;
                         break;
                     }
                 }
-                ImGui::BeginDisabled(LastSucceeded == nullptr);
-                if (ImGui::Button("加载最后一个成功任务的 SKRV") &&
-                    LastSucceeded != nullptr)
+                if (SelectedAnimation == nullptr &&
+                    !ReviewAnimations.empty())
+                {
+                    SelectedAnimation = &ReviewAnimations.front();
+                    State->SelectedBatchReviewJobIndex =
+                        SelectedAnimation->JobIndex;
+                }
+                ImGui::SeparatorText("成功动画审查");
+                ImGui::SetNextItemWidth(520.0F);
+                if (ImGui::BeginCombo(
+                        "动画##BatchReviewAnimation",
+                        SelectedAnimation != nullptr
+                            ? SelectedAnimation->Label.c_str()
+                            : "暂无成功动画"))
+                {
+                    for (const BatchReviewAnimation& Animation :
+                         ReviewAnimations)
+                    {
+                        const bool Selected =
+                            State->SelectedBatchReviewJobIndex.has_value() &&
+                            Animation.JobIndex ==
+                                *State->SelectedBatchReviewJobIndex;
+                        ImGui::PushID(
+                            static_cast<int>(Animation.JobIndex));
+                        if (ImGui::Selectable(
+                                Animation.Label.c_str(), Selected))
+                        {
+                            State->SelectedBatchReviewJobIndex =
+                                Animation.JobIndex;
+                        }
+                        if (Selected) ImGui::SetItemDefaultFocus();
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::BeginDisabled(SelectedAnimation == nullptr);
+                if (ImGui::Button("加载所选动画到四视图") &&
+                    SelectedAnimation != nullptr)
                 {
                     State->RequestedPackage =
-                        LastSucceeded->ReviewPackage;
+                        SelectedAnimation->ReviewPackage;
                 }
                 ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled(
+                    "只列成功任务；切换时重新严格校验 SKRV");
 
                 int ShownFailures = 0;
                 for (const BatchRetargetJob& Job : Status.Jobs)
@@ -2476,6 +2520,18 @@ bool RetargetBridgeUi::IsRunning() const { return State->Process.IsActive(); }
 int RetargetBridgeUi::CompletedRunCount() const
 {
     return State->CompletedRuns;
+}
+
+std::vector<BatchReviewAnimation>
+RetargetBridgeUi::ReviewableBatchAnimations() const
+{
+    return BuildBatchReviewAnimationList(State->LastBatchStatus);
+}
+
+void RetargetBridgeUi::SetSelectedBatchReviewJobIndex(
+    const std::size_t JobIndex)
+{
+    State->SelectedBatchReviewJobIndex = JobIndex;
 }
 
 std::optional<std::filesystem::path>

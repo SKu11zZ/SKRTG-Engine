@@ -102,6 +102,24 @@ from the declared total, folder-scan semantics, or a non-serial policy.
 The implementation and successful execution of this route do not constitute
 algorithm selection or adoption.
 
+## Viewer animation selector
+
+Every successful job is projected into a Viewer playlist in deterministic
+batch-job order. The batch-result panel provides a successful-animation
+selector and `加载所选动画到四视图`. The main review page shows an `动画`
+selector whenever the current batch contains more than one successful
+animation. If no SKRV is open yet, the empty review page offers the same
+successful-animation list.
+
+Selecting an animation does not trust the batch status as display data. The
+Viewer opens that job's independent `review.skrv`, repeats the full SKRV
+integrity and manifest validation, then pauses playback, seeks to frame zero,
+loads the selected clip's frame count and rate, and resets the synchronized
+camera baseline. Failed, pending, incomplete, or pathless jobs are not listed.
+
+This is a presentation playlist, not a new container format: batch v3 still
+stores one SKRV per animation and SKRV v1 remains unchanged.
+
 ## Compatibility and limits
 
 - Legacy external request v1 and loose UE request v2 remain readable and keep

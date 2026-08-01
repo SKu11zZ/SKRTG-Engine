@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -91,6 +92,25 @@ struct MeshCallbackData
     std::size_t LayerCount = 0;
     std::string* RenderError = nullptr;
 };
+
+std::string ComparableReviewPackagePath(
+    const std::filesystem::path& Package)
+{
+    std::error_code Error;
+    const std::filesystem::path Absolute =
+        std::filesystem::absolute(Package, Error);
+    std::string Result = PathToUtf8(
+        (Error ? Package : Absolute).lexically_normal());
+#if defined(_WIN32)
+    std::transform(
+        Result.begin(), Result.end(), Result.begin(),
+        [](const unsigned char Character)
+        {
+            return static_cast<char>(std::tolower(Character));
+        });
+#endif
+    return Result;
+}
 
 ImU32 WithOpacity(const ImVec4& Color, const float Opacity)
 {
@@ -1452,6 +1472,8 @@ int RunNativeViewer(
                 "Mesh 渲染失败：%s", MeshRenderError.c_str());
         }
 
+        const std::vector<BatchReviewAnimation> BatchAnimations =
+            BridgeUi.ReviewableBatchAnimations();
         if (Scene.has_value())
         {
             ImGui::PushID("Transport");
@@ -1499,11 +1521,64 @@ int RunNativeViewer(
                     : 0.0);
             ImGui::PopID();
 
+            bool HasAnimationSelector = false;
+            if (BatchAnimations.size() > 1)
+            {
+                const std::string CurrentPackage =
+                    ComparableReviewPackagePath(
+                        Scene->PackageDirectory);
+                const BatchReviewAnimation* CurrentAnimation = nullptr;
+                for (const BatchReviewAnimation& Animation :
+                     BatchAnimations)
+                {
+                    if (ComparableReviewPackagePath(
+                            Animation.ReviewPackage) ==
+                        CurrentPackage)
+                    {
+                        CurrentAnimation = &Animation;
+                        break;
+                    }
+                }
+                const std::string Preview = CurrentAnimation != nullptr
+                    ? CurrentAnimation->Label
+                    : Scene->ClipLabel + "（当前 SKRV）";
+                ImGui::SetNextItemWidth(420.0F);
+                if (ImGui::BeginCombo("动画", Preview.c_str()))
+                {
+                    for (const BatchReviewAnimation& Animation :
+                         BatchAnimations)
+                    {
+                        const bool Selected =
+                            ComparableReviewPackagePath(
+                                Animation.ReviewPackage) ==
+                            CurrentPackage;
+                        ImGui::PushID(
+                            static_cast<int>(Animation.JobIndex));
+                        if (ImGui::Selectable(
+                                Animation.Label.c_str(), Selected) &&
+                            !Selected &&
+                            OpenVerifiedPackage(
+                                Animation.ReviewPackage, 0))
+                        {
+                            BridgeUi.SetSelectedBatchReviewJobIndex(
+                                Animation.JobIndex);
+                            SceneLoadMessage =
+                                "已切换动画：" + Animation.Label +
+                                "。SKRV 已重新执行严格校验。";
+                        }
+                        if (Selected) ImGui::SetItemDefaultFocus();
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+                HasAnimationSelector = true;
+            }
             if (Scene->Clips.size() > 1)
             {
+                if (HasAnimationSelector) ImGui::SameLine();
                 ImGui::SetNextItemWidth(420.0F);
                 if (ImGui::BeginCombo(
-                        "动画片段", Scene->ClipLabel.c_str()))
+                        "包内片段", Scene->ClipLabel.c_str()))
                 {
                     const std::filesystem::path Package =
                         Scene->PackageDirectory;
@@ -1521,7 +1596,6 @@ int RunNativeViewer(
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SameLine();
             }
             ImGui::Separator();
             bool FootLockDisplayEnabled =
@@ -1785,6 +1859,41 @@ int RunNativeViewer(
             ImGui::BeginChild(
                 "NoReviewLoaded", {0.0F, 0.0F}, ImGuiChildFlags_Borders);
             ImGui::TextUnformatted("当前没有打开 SKRV 审查包。 ");
+            if (!BatchAnimations.empty())
+            {
+                ImGui::TextWrapped(
+                    "当前批次已有 %llu 条成功动画；请选择一条进入四视图审查。",
+                    static_cast<unsigned long long>(
+                        BatchAnimations.size()));
+                const std::string Preview =
+                    "选择批次动画（" +
+                    std::to_string(BatchAnimations.size()) + " 条）";
+                ImGui::SetNextItemWidth(420.0F);
+                if (ImGui::BeginCombo(
+                        "动画", Preview.c_str()))
+                {
+                    for (const BatchReviewAnimation& Animation :
+                         BatchAnimations)
+                    {
+                        ImGui::PushID(
+                            static_cast<int>(Animation.JobIndex));
+                        if (ImGui::Selectable(
+                                Animation.Label.c_str()) &&
+                            OpenVerifiedPackage(
+                                Animation.ReviewPackage, 0))
+                        {
+                            BridgeUi.SetSelectedBatchReviewJobIndex(
+                                Animation.JobIndex);
+                            SceneLoadMessage =
+                                "已打开动画：" + Animation.Label +
+                                "。SKRV 已执行严格校验。";
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::Separator();
+            }
             ImGui::TextWrapped(
                 "请从“文件”菜单导入并重定向 FBX，或打开已有 SKRV。Bridge 会在独立进程中运行冻结 Retargeter；只有通过严格校验的 SKRV 才会显示。 ");
             ImGui::EndChild();
