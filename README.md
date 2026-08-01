@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <code>Windows x64</code> · <code>C++20</code> · <code>UE 5.8 JSON</code> · <code>SKRV v1</code>
+  <code>Windows x64</code> · <code>C++20</code> · <code>Character Definition v1</code> · <code>SKRV v1</code>
 </p>
 
 <p align="center">
@@ -30,7 +30,9 @@
 
 ## 中文
 
-一句话介绍 SKRTG：把 Unreal Engine 里的 IK Rig / IK Retargeter 配置导出成 JSON，再到 UE 之外完成 FBX 动画重定向、结果验证和四视图审阅。
+一句话介绍 SKRTG：它把不同 DCC 和动画管线中的角色配置统一成可验证的 Character Definition，再离线完成 FBX 动画重定向、结果验证和四视图审阅。配置不绑定 Unreal Engine；它可以来自导出的 UE IK Rig，也可以来自 MotionBuilder、3ds Max 或其他 DCC 中定义的骨骼链。
+
+SKRTG 关心的不是配置由哪个软件生成，而是信息是否明确：完整骨骼层级与唯一骨名、参考姿势及坐标系/单位、Retarget Root 与 Pelvis、每条链的起止骨骼、可选 IK Goal / Pole / 求解模式，以及源目标之间的显式姿势对齐与稳定身份指纹。只要导出器或适配器能提供这些语义，就可以进入同一个 `.skrtgprofile` 工作流。
 
 我们希望它做事有依据，也愿意把没做完的地方写清楚。配置不完整时，SKRTG 会停下来报错；它不会猜骨骼名，也不会为了“看起来能跑”而悄悄换一条路线。
 
@@ -55,8 +57,8 @@
 ### 现在可以做什么
 
 - 用统一的 `skrtg` CLI 完成能力发现、环境检查、Profile 导入/检查、Batch、Bridge、SKRV 验证和 Agent 调试；`--json` 提供稳定机器协议。
-- 把 UE IK Rig JSON、SKRTG Character Definition JSON/XML 规范化为同一个角色定义；也可以只读探测 Rest FBX，并明确列出尚缺的映射信息。
-- 用 `.skrtgprofile v1` 把一个角色的 Rest FBX、IK Rig JSON、对齐用 IK Retargeter JSON 和完整性清单放进同一个可验证角色包。
+- 通过格式适配器把 UE IK Rig 导出、SKRTG Character Definition JSON/XML，以及来自 MotionBuilder、3ds Max 等 DCC 的骨骼链导出规范化为同一个角色定义；也可以只读探测 Rest FBX，并明确列出尚缺的信息。
+- 用 `.skrtgprofile v1` 把一个角色的 Rest FBX、规范化/编译后的 Rig 定义、显式对齐数据、来源记录和完整性清单放进同一个可验证角色包。
 - 在 Viewer 中安装、检查、切换和移除角色 Profile；同一角色可以安装多个版本，默认启用最高 SemVer 版本。
 - 在批处理界面选择源角色和目标角色。动画列表只显示属于当前源骨骼、且 skeleton signature 完全匹配的动画。
 - 一次选择多段动画，预检全部通过后再开始；运行时固定一个 Worker，处理完一段才进入下一段。
@@ -67,18 +69,20 @@
 ### 数据怎么进入 SKRTG
 
 ```text
-UE 5.8 Exporter JSON / Character Definition JSON or XML / Rest FBX probe
+UE IK Rig export / MoBu or 3ds Max chain export / Character Definition JSON or XML / Rest FBX probe
+  → format adapter
+  → skrtg.character_definition.v1
   → skrtg profile probe / normalize / create
   → .skrtgprofile
 
 .skrtgprofile + 外部动画 Catalog
   → Bridge v5 / Batch v3
-  → UE IK JSON Worker
+  → Retarget Worker（当前内置 UE-compatible JSON backend）
   → 目标 FBX + SKRV v1
   → Native Viewer
 ```
 
-软件不会直接读取 `.uasset`。UE 负责把配置和参考数据导出成 JSON，SKRTG 负责在离线运行时重新验证这些输入。
+运行时不要求安装或启动 UE，也不会直接读取 `.uasset`、MotionBuilder 场景或 3ds Max 场景。来自 UE 的配置可以导出为 IK Rig JSON；其他 DCC 可以直接导出 `skrtg.character_definition.v1` JSON/XML，或通过专用适配器转换。当前内置直接适配器覆盖 UE IK Rig JSON、SKRTG JSON/XML 与 Rest FBX 探测；新增 DCC 原生格式时沿用同一适配器边界。
 
 ### 从源码构建
 
@@ -112,7 +116,7 @@ cmake -S . -B build -A x64 `
 - Vicon 尚未进入这一阶段。
 - MetaHuman 手指仍保留现有 Coordinate Basis Fix V1 基线；已知的手指塌陷问题还没有被新算法解决。
 - MetaHuman / SMPL 作为源角色时，目前只有 round-trip probe，没有独立源动画语料。
-- 不自动推断骨骼映射，不自动生成 IK Rig，也不在缺少数据时静默回退。
+- 不自动臆测骨骼链、Root/Pelvis 或源目标映射，也不在缺少必要语义时静默回退。
 - 材质、贴图、Morph Target、Blend Shape fidelity、跨平台与便携运行时尚未进入发布门槛。
 - Viewer 只读取 SKRV，不会在显示层重新计算或“美化”算法差异。
 
@@ -139,7 +143,9 @@ cmake -S . -B build -A x64 `
 
 ## English
 
-SKRTG takes IK Rig and IK Retargeter data exported from Unreal Engine as JSON, then performs FBX retargeting, validation, and four-view review outside UE.
+SKRTG normalizes character configurations from different DCC tools and animation pipelines into one verifiable Character Definition, then performs FBX retargeting, validation, and four-view review offline. The configuration is not tied to Unreal Engine: it may come from an exported UE IK Rig, or from skeleton chains defined in MotionBuilder, 3ds Max, or another DCC.
+
+SKRTG cares about explicit semantics rather than the authoring application: a complete skeleton hierarchy with unique bone names, a reference pose with coordinate system and units, Retarget Root and Pelvis roles, start/end bones for every chain, optional IK goals, poles and solve modes, explicit source/target pose alignment, and a stable identity fingerprint. Any exporter or adapter that supplies those facts can enter the same `.skrtgprofile` workflow.
 
 The project is deliberately strict about evidence. When configuration is incomplete, it stops with an error. It does not guess bone names or quietly switch to a different route just to produce something that looks plausible.
 
@@ -162,8 +168,8 @@ See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) for the validation record
 ### What works today
 
 - The unified `skrtg` CLI covers capability discovery, environment checks, Profile import/inspection, Batch, Bridge, SKRV verification, and agent diagnostics. `--json` provides a stable machine contract.
-- UE IK Rig JSON and SKRTG Character Definition JSON/XML normalize into one character model. A Rest FBX can also be probed read-only, with missing mapping semantics reported explicitly.
-- `.skrtgprofile v1` packages a character's rest FBX, IK Rig JSON, alignment IK Retargeter JSON, metadata, and integrity inventory into one verifiable unit.
+- Format adapters normalize UE IK Rig exports, SKRTG Character Definition JSON/XML, and skeleton-chain exports from tools such as MotionBuilder or 3ds Max into one character model. A Rest FBX can also be probed read-only, with missing semantics reported explicitly.
+- `.skrtgprofile v1` packages a character's rest FBX, normalized/compiled rig definition, explicit alignment data, provenance, metadata, and integrity inventory into one verifiable unit.
 - The Viewer can inspect, install, switch, and remove profiles. Multiple versions can coexist, with the highest SemVer version active by default.
 - The batch UI selects source and target profiles, then shows only animations owned by the selected source skeleton with an exact matching skeleton signature.
 - Multiple clips can be selected at once. The complete set is preflighted first, then processed serially with one Worker.
@@ -174,18 +180,20 @@ See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) for the validation record
 ### How data moves through SKRTG
 
 ```text
-UE 5.8 Exporter JSON / Character Definition JSON or XML / Rest FBX probe
+UE IK Rig export / MoBu or 3ds Max chain export / Character Definition JSON or XML / Rest FBX probe
+  → format adapter
+  → skrtg.character_definition.v1
   → skrtg profile probe / normalize / create
   → .skrtgprofile
 
 .skrtgprofile + external animation catalog
   → Bridge v5 / Batch v3
-  → UE IK JSON Worker
+  → Retarget Worker (current built-in UE-compatible JSON backend)
   → target FBX + SKRV v1
   → Native Viewer
 ```
 
-The runtime never parses `.uasset` files. UE exports configuration and reference data to JSON; SKRTG re-validates those inputs before offline execution.
+The runtime does not require UE to be installed or running, and it does not directly parse `.uasset`, MotionBuilder scene, or 3ds Max scene files. UE configurations can be exported as IK Rig JSON; other DCC tools can emit `skrtg.character_definition.v1` JSON/XML directly or use a dedicated adapter. Built-in direct adapters currently cover UE IK Rig JSON, SKRTG JSON/XML, and Rest FBX probing. New native DCC formats use the same adapter boundary.
 
 ### Build from source
 
@@ -219,7 +227,7 @@ cmake -S . -B build -A x64 `
 - Vicon is not part of this stage.
 - MetaHuman fingers remain on the current Coordinate Basis Fix V1 baseline; the known finger-collapse issue has not been solved by a newly adopted algorithm.
 - MetaHuman and SMPL have round-trip source probes, not independently authored source-motion coverage.
-- There is no automatic skeleton mapping, IK Rig generation, or silent fallback when required data is missing.
+- There is no guessed chain, Root/Pelvis, or source/target mapping, and no silent fallback when required semantics are missing.
 - Materials, textures, morph targets, Blend Shape fidelity, cross-platform builds, and a portable runtime are not release gates yet.
 - The Viewer reads SKRV results; it does not recompute or exaggerate algorithmic differences in the presentation layer.
 
