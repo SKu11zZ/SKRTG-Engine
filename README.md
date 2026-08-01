@@ -1,95 +1,85 @@
-# SKRTG Engine
+<a id="top" name="top"></a>
 
-SKRTG is an offline skeletal retargeting engine and native review toolchain.
-The current public source route consumes configuration exported from Unreal
-Engine as JSON; it never reads `.uasset` files.
+<h1 align="center">SKRTG Engine</h1>
 
-This repository intentionally contains source code only. Character files,
-animation clips, Unreal projects, exported rig definitions, Golden pose data,
-review packages, and compiled releases are not included.
+<p align="center">
+  离线、可验证的骨骼重定向工具链。<br>
+  An offline, verifiable skeletal-retargeting toolchain.
+</p>
 
-## Components
+<p align="center">
+  <a href="#read-chinese"><img alt="中文" src="https://img.shields.io/badge/中文-阅读中文版-18181B?style=for-the-badge"></a>
+  <a href="#read-english"><img alt="English" src="https://img.shields.io/badge/English-Read_in_English-18181B?style=for-the-badge"></a>
+  <a href="#current-build"><img alt="Current build" src="https://img.shields.io/badge/Current_build-Four_Profile_Matrix-D6A900?style=for-the-badge"></a>
+</p>
 
-- `skrtg_ueik_retarget_worker` — hash-bound FBX retargeting worker driven by
-  exported IK Rig and IK Retargeter JSON.
-- `skrtg_ueik_route_probe` — validates a source/target JSON route without
-  running a full clip.
-- `skrtg_viewer` — native GLFW/OpenGL/ImGui four-lane review Viewer.
-- `skrtg_retarget_bridge` — serial process bridge between the Worker and the
-  read-only SKRV review boundary.
-- `skrtg_batch_retarget` — low-memory batch runner with one active Worker.
-- `skrv_pack` and `skrv_inspect` — SKRV v1 packaging and inspection tools.
-- `.skrtgprofile` v1 — installable, hash-bound character profile used as
-  either a source or a target.
-- `skrtgprofile_pack`, `skrtgprofile_inspect`, and
-  `skrtgprofile_install` — profile authoring, audit, and headless
-  installation tools.
+<p align="center">
+  <code>Windows x64</code> · <code>C++20</code> · <code>UE 5.8 JSON</code> · <code>SKRV v1</code>
+</p>
 
-## Input contract
+---
 
-The production-facing route is explicit and fail-closed:
+<a id="read-chinese" name="read-chinese"></a>
 
-1. Export IK Rig, IK Retargeter, rest-pose, and animation Golden data from
-   Unreal Engine to JSON.
-2. Provide source-rest, source-animation, and target-rest FBX files.
-3. Bind every input by SHA-256 in an external asset catalog.
-4. Let the Worker validate coordinate conversion, hierarchy, rest pose,
-   animation keys, and route compatibility before it commits output.
-5. Review the generated SKRV package in the native Viewer.
+## 中文
 
-No skeleton-name inference, direct Unreal asset parsing, or silent fallback
-route is enabled.
+一句话介绍 SKRTG：把 Unreal Engine 里的 IK Rig / IK Retargeter 配置导出成 JSON，再到 UE 之外完成 FBX 动画重定向、结果验证和四视图审阅。
 
-## Character profiles
+我们希望它做事有依据，也愿意把没做完的地方写清楚。配置不完整时，SKRTG 会停下来报错；它不会猜骨骼名，也不会为了“看起来能跑”而悄悄换一条路线。
 
-A `.skrtgprofile` keeps one character's rest FBX, UE-exported IK Rig JSON,
-canonical-to-character IK Retargeter JSON, metadata, and integrity inventory
-in one verified package. Animations remain external and are filtered by their
-declared source profile ID.
+<a id="current-build" name="current-build"></a>
 
-Create and verify a package:
+### 目前做到哪一步
 
-```powershell
-skrtgprofile_pack `
-  --id my_character `
-  --version 1.0.0 `
-  --label "My Character" `
-  --rest "D:/private/rest.fbx" `
-  --rig "D:/private/IK_MyCharacter.ikrig.json" `
-  --alignment "D:/private/RTG_Canonical_MyCharacter.ikretargeter.json" `
-  --out "D:/private/my_character.skrtgprofile"
+| 项目 | 当前状态 |
+| --- | --- |
+| 角色 Profile | **通过**：Mixamo Y Bot、MetaHuman、UE5 Manny、SMPL |
+| 非同源有向路线 | **12 / 12** 通过静态预检 |
+| 动态任务 | **18 / 18** 完成并通过结果校验 |
+| 正式源动画 | **4 段**：2 段 Mixamo、2 段 Manny |
+| MetaHuman / SMPL 作为源 | **黄灯**：已走通 round-trip probe，仍缺独立创作的源动画语料 |
+| 路线采纳状态 | `candidateRouteSelected=false` / `candidateRouteAdopted=false` |
+| Vicon | 本阶段暂不处理 |
 
-skrtgprofile_inspect "D:/private/my_character.skrtgprofile"
-skrtgprofile_install "D:/private/my_character.skrtgprofile"
+这里的 18 个动态任务不是同一种证据：其中 12 个使用用户提供的 Mixamo / Manny 原始动画；另外 6 个是明确标记的 UE 5.8 round-trip probe，用来验证 MetaHuman / SMPL 的反向运行链。Probe 能证明链路可运行，但不能替代真正的 MetaHuman / SMPL 源动画质量验收。
+
+完整记录见 [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md)。
+
+### 现在可以做什么
+
+- 用 `.skrtgprofile v1` 把一个角色的 Rest FBX、IK Rig JSON、对齐用 IK Retargeter JSON 和完整性清单放进同一个可验证角色包。
+- 在 Viewer 中安装、检查、切换和移除角色 Profile；同一角色可以安装多个版本，默认启用最高 SemVer 版本。
+- 在批处理界面选择源角色和目标角色。动画列表只显示属于当前源骨骼、且 skeleton signature 完全匹配的动画。
+- 一次选择多段动画，预检全部通过后再开始；运行时固定一个 Worker，处理完一段才进入下一段。
+- 为每段动画生成独立的目标 FBX 和 SKRV v1 审阅包。
+- 在原生 Viewer 的 Original、FK、Foundation、Final 四个同步视图中检查结果，并在同一批结果里切换动画。
+- 对输入 Profile、Catalog、FBX、Golden JSON 和输出文件做 SHA-256 绑定与复核。
+
+### 数据怎么进入 SKRTG
+
+```text
+UE 5.8 Exporter
+  ├─ IK Rig JSON
+  ├─ IK Retargeter JSON
+  └─ Rest / Animation Golden JSON
+
+.skrtgprofile + 外部动画 Catalog
+  → Bridge v5 / Batch v3
+  → UE IK JSON Worker
+  → 目标 FBX + SKRV v1
+  → Native Viewer
 ```
 
-The native Viewer can also browse, verify, install, refresh, and remove
-profiles. Multiple versions may be installed; the highest SemVer version is
-active. Bridge request v5 binds the selected source and target package hashes
-and independently re-verifies both packages before starting the Worker.
-The batch panel uses the same installed profiles and catalog filtering. Its
-profile-backed v3 request expands every selected animation into an independent
-Bridge v5 job, preflights the complete selection before creating output, and
-runs one Worker at a time. Successful jobs appear in both the batch-result
-panel and the native Viewer's `动画` selector as one review playlist. Choosing
-another animation opens its independent SKRV, repeats strict package
-validation, pauses playback, and resets the frame to zero with the new clip's
-timing.
+软件不会直接读取 `.uasset`。UE 负责把配置和参考数据导出成 JSON，SKRTG 负责在离线运行时重新验证这些输入。
 
-See [docs/SKRTGPROFILE_V1.md](docs/SKRTGPROFILE_V1.md) for the exact contract.
-See [docs/PROFILE_BATCH_V3.md](docs/PROFILE_BATCH_V3.md) for the batch request,
-status, and failure contract.
+### 从源码构建
 
-## Build
+需要：
 
-Requirements:
-
-- CMake 3.23 or newer
-- A C++20-capable compiler (Visual Studio 2022 is the tested Windows toolchain)
+- CMake 3.23+
+- 支持 C++20 的编译器（已验证 Visual Studio 2022）
 - Autodesk FBX SDK 2020.3.9
-- OpenGL 3.3-capable graphics driver
-
-Example:
+- 支持 OpenGL 3.3 的显卡驱动
 
 ```powershell
 cmake -S . -B build -A x64 `
@@ -98,12 +88,9 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The Autodesk SDK and its license are not redistributed by this repository.
+Autodesk FBX SDK 及其许可证不会由本仓库重新分发。
 
-## External catalog
-
-The Viewer builds and starts without any private asset data. To create a local
-package with your own catalog, pass a directory outside the repository:
+私有角色和动画目录通过 `SKRTG_RETARGET_ASSET_CATALOG_DIR` 传入，不需要复制进仓库：
 
 ```powershell
 cmake -S . -B build -A x64 `
@@ -111,42 +98,125 @@ cmake -S . -B build -A x64 `
   -DSKRTG_RETARGET_ASSET_CATALOG_DIR="D:/private/skrtg_catalog"
 ```
 
-That directory must contain `retarget_asset_catalog.json`. CMake copies it
-only into the local build output; it is ignored by Git.
+### 现在还不能承诺什么
 
-## Current boundary
+- 当前只正式验证 Windows x64。
+- Vicon 尚未进入这一阶段。
+- MetaHuman 手指仍保留现有 Coordinate Basis Fix V1 基线；已知的手指塌陷问题还没有被新算法解决。
+- MetaHuman / SMPL 作为源角色时，目前只有 round-trip probe，没有独立源动画语料。
+- 不自动推断骨骼映射，不自动生成 IK Rig，也不在缺少数据时静默回退。
+- 材质、贴图、Morph Target、Blend Shape fidelity、跨平台与便携运行时尚未进入发布门槛。
+- Viewer 只读取 SKRV，不会在显示层重新计算或“美化”算法差异。
 
-- Windows x64 is the validated product platform.
-- UE configuration is JSON-export based, not direct engine-asset access.
-- The exact animation path is currently tied to the UE 5.8 import contract and
-  checks every exported key against Golden data.
-- Animation-only FBX files without a Mesh, SkinCluster, or FBX BindPose are
-  accepted only when the hash-bound UE Golden reference skeleton matches the
-  selected source IK Rig within the same strict rest tolerances. If any FBX
-  bind evidence exists, the Worker keeps the original bind-evidence path and
-  does not fall back to Golden reference data.
-- A profile contains character configuration, not animation clips. A usable
-  source still needs a separately cataloged, hash-bound animation whose
-  `sourceSkeletonId` and `sourceSkeletonSignatureSha256` equal the selected
-  profile identity and skeleton fingerprint.
-- An animation-only catalog can declare `externalSkeletonIds`; profile-backed
-  characters do not need duplicate loose skeleton resources in that catalog.
-- The Viewer consumes SKRV and does not recompute retargeting.
-- Profile-backed batch v3 accepts only installed source/target profiles and
-  explicitly selected compatible catalog animations. It does not scan an
-  arbitrary animation directory.
-- Batch execution is serial by design. All selected profile-backed jobs pass
-  package, catalog, animation, Golden, and resource-hash preflight before the
-  output directory is created.
-- Multiple batch results remain one verified SKRV per animation. The Viewer
-  presents them through a session playlist; it does not merge packages or
-  bypass SKRV validation when switching.
-- Legacy batch request v1/v2 remains readable for compatibility, but it does
-  not gain profile provenance.
-- Material, texture, morph-target, portable runtime, and cross-platform
-  release gates remain open work.
+这个公开仓库只放源码、测试和文档。角色 FBX、动画、UE 工程、导出的 Rig / Golden JSON、`.skrtgprofile`、SKRV 和编译包都留在私有数据边界之外。
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the runtime flow and
-[docs/ASSET_POLICY.md](docs/ASSET_POLICY.md) for repository boundaries.
-See [docs/NON_VICON_MATRIX_V1.md](docs/NON_VICON_MATRIX_V1.md) for the
-four-profile private-corpus validation scope and its evidence limits.
+### 继续阅读
+
+- [架构与运行链](docs/ARCHITECTURE.md)
+- [`.skrtgprofile v1` 合同](docs/SKRTGPROFILE_V1.md)
+- [Profile Batch v3 合同](docs/PROFILE_BATCH_V3.md)
+- [资产边界](docs/ASSET_POLICY.md)
+- [四角色矩阵验证记录](docs/NON_VICON_MATRIX_V1.md)
+
+<p align="right"><a href="#top">返回顶部 ↑</a></p>
+
+---
+
+<a id="read-english" name="read-english"></a>
+
+## English
+
+SKRTG takes IK Rig and IK Retargeter data exported from Unreal Engine as JSON, then performs FBX retargeting, validation, and four-view review outside UE.
+
+The project is deliberately strict about evidence. When configuration is incomplete, it stops with an error. It does not guess bone names or quietly switch to a different route just to produce something that looks plausible.
+
+### Where the project stands
+
+| Area | Current status |
+| --- | --- |
+| Character profiles | **Passed**: Mixamo Y Bot, MetaHuman, UE5 Manny, and SMPL |
+| Directed non-identity routes | **12 / 12** passed static preflight |
+| Dynamic jobs | **18 / 18** completed and verified |
+| Production source clips | **4 clips**: two Mixamo and two Manny motions |
+| MetaHuman / SMPL as sources | **Caution**: round-trip probes pass, but independently authored source clips are still missing |
+| Route adoption | `candidateRouteSelected=false` / `candidateRouteAdopted=false` |
+| Vicon | Deferred from this stage |
+
+The 18 dynamic jobs do not all carry the same weight. Twelve use the original Mixamo and Manny clips supplied for the project. The remaining six are clearly labeled UE 5.8 round-trip probes for the MetaHuman and SMPL reverse paths. Those probes show that the runtime path works; they are not a substitute for quality validation with independently authored MetaHuman or SMPL motion.
+
+See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) for the validation record.
+
+### What works today
+
+- `.skrtgprofile v1` packages a character's rest FBX, IK Rig JSON, alignment IK Retargeter JSON, metadata, and integrity inventory into one verifiable unit.
+- The Viewer can inspect, install, switch, and remove profiles. Multiple versions can coexist, with the highest SemVer version active by default.
+- The batch UI selects source and target profiles, then shows only animations owned by the selected source skeleton with an exact matching skeleton signature.
+- Multiple clips can be selected at once. The complete set is preflighted first, then processed serially with one Worker.
+- Every clip produces its own target FBX and SKRV v1 review package.
+- The native Viewer keeps Original, FK, Foundation, and Final lanes synchronized and can switch between verified results from the same batch session.
+- Profiles, catalogs, FBX files, Golden JSON, and outputs are bound and rechecked with SHA-256.
+
+### How data moves through SKRTG
+
+```text
+UE 5.8 Exporter
+  ├─ IK Rig JSON
+  ├─ IK Retargeter JSON
+  └─ Rest / Animation Golden JSON
+
+.skrtgprofile + external animation catalog
+  → Bridge v5 / Batch v3
+  → UE IK JSON Worker
+  → target FBX + SKRV v1
+  → Native Viewer
+```
+
+The runtime never parses `.uasset` files. UE exports configuration and reference data to JSON; SKRTG re-validates those inputs before offline execution.
+
+### Build from source
+
+Requirements:
+
+- CMake 3.23 or newer
+- A C++20-capable compiler (Visual Studio 2022 is tested)
+- Autodesk FBX SDK 2020.3.9
+- An OpenGL 3.3-capable graphics driver
+
+```powershell
+cmake -S . -B build -A x64 `
+  -DSKRTG_FBX_SDK_ROOT="C:/Program Files/Autodesk/FBX/FBX SDK/2020.3.9"
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+The Autodesk FBX SDK and its license are not redistributed by this repository.
+
+Private character and animation data can stay outside the repository:
+
+```powershell
+cmake -S . -B build -A x64 `
+  -DSKRTG_FBX_SDK_ROOT="C:/Program Files/Autodesk/FBX/FBX SDK/2020.3.9" `
+  -DSKRTG_RETARGET_ASSET_CATALOG_DIR="D:/private/skrtg_catalog"
+```
+
+### Honest boundaries
+
+- Windows x64 is the only formally validated platform today.
+- Vicon is not part of this stage.
+- MetaHuman fingers remain on the current Coordinate Basis Fix V1 baseline; the known finger-collapse issue has not been solved by a newly adopted algorithm.
+- MetaHuman and SMPL have round-trip source probes, not independently authored source-motion coverage.
+- There is no automatic skeleton mapping, IK Rig generation, or silent fallback when required data is missing.
+- Materials, textures, morph targets, Blend Shape fidelity, cross-platform builds, and a portable runtime are not release gates yet.
+- The Viewer reads SKRV results; it does not recompute or exaggerate algorithmic differences in the presentation layer.
+
+This public repository contains source code, tests, and documentation only. Character FBX files, animation clips, Unreal projects, exported Rig / Golden JSON, `.skrtgprofile` packages, SKRV results, and compiled releases stay outside the public data boundary.
+
+### Documentation
+
+- [Architecture and runtime flow](docs/ARCHITECTURE.md)
+- [`.skrtgprofile v1` contract](docs/SKRTGPROFILE_V1.md)
+- [Profile Batch v3 contract](docs/PROFILE_BATCH_V3.md)
+- [Asset policy](docs/ASSET_POLICY.md)
+- [Four-profile matrix validation](docs/NON_VICON_MATRIX_V1.md)
+
+<p align="right"><a href="#top">Back to top ↑</a></p>
