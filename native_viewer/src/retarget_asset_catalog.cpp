@@ -1,5 +1,6 @@
 #include "skrtg/viewer/retarget_asset_catalog.h"
 
+#include "skrtg/viewer/profile/character_profile.h"
 #include "skrtg/viewer/skrv/sha256.h"
 
 #include <nlohmann/json.hpp>
@@ -241,7 +242,8 @@ std::filesystem::path DiscoverRetargetAssetCatalog(
 
 RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
     const std::filesystem::path& CatalogFile,
-    const bool VerifyFilesAndHashes)
+    const bool VerifyFilesAndHashes,
+    const std::vector<std::string>& ExternalSkeletonIds)
 {
     RetargetAssetCatalogLoadResult Result;
     Result.Catalog.CatalogFile =
@@ -298,16 +300,73 @@ RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
                 .lexically_normal();
 
         std::set<std::string> SkeletonIds;
+        std::set<std::string> ExternalSkeletonIdSet;
+        const nlohmann::json DeclaredExternalSkeletonIds =
+            Json.value(
+                "externalSkeletonIds",
+                nlohmann::json::array());
+        if (!DeclaredExternalSkeletonIds.is_array())
+        {
+            Result.Errors.push_back(
+                "externalSkeletonIds must be an array");
+            return Result;
+        }
+        for (const nlohmann::json& Item :
+             DeclaredExternalSkeletonIds)
+        {
+            if (!Item.is_string())
+            {
+                Result.Errors.push_back(
+                    "externalSkeletonIds entries must be strings");
+                continue;
+            }
+            const std::string ExternalSkeletonId =
+                Item.get<std::string>();
+            if (!profile::IsCharacterProfileId(
+                    ExternalSkeletonId))
+            {
+                Result.Errors.push_back(
+                    "invalid declared external skeleton id: " +
+                    ExternalSkeletonId);
+                continue;
+            }
+            if (!ExternalSkeletonIdSet.insert(
+                    ExternalSkeletonId).second)
+            {
+                Result.Errors.push_back(
+                    "duplicate declared external skeleton id: " +
+                    ExternalSkeletonId);
+                continue;
+            }
+            Result.Catalog.ExternalSkeletonIds.push_back(
+                ExternalSkeletonId);
+        }
+        for (const std::string& ExternalSkeletonId :
+             ExternalSkeletonIds)
+        {
+            if (!profile::IsCharacterProfileId(
+                    ExternalSkeletonId))
+            {
+                Result.Errors.push_back(
+                    "invalid external skeleton id: " +
+                    ExternalSkeletonId);
+            }
+            ExternalSkeletonIdSet.insert(ExternalSkeletonId);
+        }
         for (const nlohmann::json& Item : Json.at("skeletons"))
         {
             RetargetSkeletonAsset Skeleton;
             Skeleton.Id = Item.at("id").get<std::string>();
             Skeleton.Label = Item.at("label").get<std::string>();
+            Skeleton.SkeletonSignatureSha256 = UpperAscii(
+                Item.value(
+                    "skeletonSignatureSha256",
+                    std::string()));
             Skeleton.SourceEnabled =
                 Item.value("sourceEnabled", true);
             Skeleton.TargetEnabled =
                 Item.value("targetEnabled", true);
-            if (!IsContractId(Skeleton.Id))
+            if (!profile::IsCharacterProfileId(Skeleton.Id))
             {
                 Result.Errors.push_back(
                     "invalid skeleton id: " + Skeleton.Id);
@@ -321,6 +380,13 @@ RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
             {
                 Result.Errors.push_back(
                     "skeleton label is empty: " + Skeleton.Id);
+            }
+            if (!Skeleton.SkeletonSignatureSha256.empty() &&
+                !IsSha256(Skeleton.SkeletonSignatureSha256))
+            {
+                Result.Errors.push_back(
+                    "skeleton signature is invalid: " +
+                    Skeleton.Id);
             }
             const FileBinding Rest = ParseFileBinding(
                 Item, "restFbx", Result.Catalog.AssetRoot,
@@ -349,6 +415,10 @@ RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
             Animation.Label = Item.at("label").get<std::string>();
             Animation.SourceSkeletonId =
                 Item.at("sourceSkeletonId").get<std::string>();
+            Animation.SourceSkeletonSignatureSha256 = UpperAscii(
+                Item.value(
+                    "sourceSkeletonSignatureSha256",
+                    std::string()));
             Animation.AnimationStack =
                 Item.value("animationStack", std::string());
             Animation.Enabled = Item.value("enabled", true);
@@ -366,6 +436,14 @@ RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
             {
                 Result.Errors.push_back(
                     "animation label is empty: " + Animation.Id);
+            }
+            if (!Animation.SourceSkeletonSignatureSha256.empty() &&
+                !IsSha256(
+                    Animation.SourceSkeletonSignatureSha256))
+            {
+                Result.Errors.push_back(
+                    "animation source skeleton signature is invalid: " +
+                    Animation.Id);
             }
             if (!ParseRetargetBridgeSourceFbxImportMode(
                     Item.at("sourceFbxImportMode")
@@ -407,10 +485,23 @@ RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
                     Result.Catalog, Animation.SourceSkeletonId);
             if (Source == nullptr)
             {
-                Result.Errors.push_back(
-                    "animation " + Animation.Id +
-                    " references unknown source skeleton " +
-                    Animation.SourceSkeletonId);
+                if (!ExternalSkeletonIdSet.contains(
+                        Animation.SourceSkeletonId))
+                {
+                    Result.Errors.push_back(
+                        "animation " + Animation.Id +
+                        " references unknown source skeleton " +
+                        Animation.SourceSkeletonId);
+                }
+                else if (!IsSha256(
+                             Animation
+                                 .SourceSkeletonSignatureSha256))
+                {
+                    Result.Errors.push_back(
+                        "animation " + Animation.Id +
+                        " must bind an external character profile by "
+                        "sourceSkeletonSignatureSha256");
+                }
             }
             else if (!Source->SourceEnabled)
             {
@@ -418,10 +509,23 @@ RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
                     "animation " + Animation.Id +
                     " references a source-disabled skeleton");
             }
+            else if (Source->SkeletonSignatureSha256 !=
+                     Animation.SourceSkeletonSignatureSha256)
+            {
+                Result.Errors.push_back(
+                    "animation " + Animation.Id +
+                    " source skeleton signature does not match " +
+                    Animation.SourceSkeletonId);
+            }
         }
 
-        if (Result.Catalog.Skeletons.empty())
+        if (Result.Catalog.Skeletons.empty() &&
+            ExternalSkeletonIdSet.empty())
             Result.Errors.push_back("asset catalog has no skeletons");
+        else if (Result.Catalog.Skeletons.empty())
+            Result.Warnings.push_back(
+                "asset catalog skeletons are supplied by installed "
+                "character profiles");
         if (Result.Catalog.Animations.empty())
             Result.Warnings.push_back("asset catalog has no animations");
 
@@ -505,13 +609,18 @@ std::vector<std::size_t> CompatibleRetargetAnimationIndices(
     const std::string& SourceSkeletonId)
 {
     std::vector<std::size_t> Result;
+    const RetargetSkeletonAsset* Source =
+        FindRetargetSkeletonAsset(Catalog, SourceSkeletonId);
+    if (Source == nullptr) return Result;
     for (std::size_t Index = 0;
          Index < Catalog.Animations.size(); ++Index)
     {
         const RetargetAnimationAsset& Animation =
             Catalog.Animations[Index];
         if (Animation.Enabled &&
-            Animation.SourceSkeletonId == SourceSkeletonId)
+            Animation.SourceSkeletonId == SourceSkeletonId &&
+            Animation.SourceSkeletonSignatureSha256 ==
+                Source->SkeletonSignatureSha256)
         {
             Result.push_back(Index);
         }
@@ -550,6 +659,14 @@ RetargetAssetSelectionValidation ValidateRetargetAssetSelection(
             "source animation belongs to " +
             Animation->SourceSkeletonId + ", not " +
             SourceSkeletonId);
+    }
+    else if (Source != nullptr &&
+             Animation->SourceSkeletonSignatureSha256 !=
+                 Source->SkeletonSignatureSha256)
+    {
+        Result.Errors.push_back(
+            "source animation skeleton signature does not match the "
+            "selected source profile");
     }
     Result.Success = Result.Errors.empty();
     return Result;

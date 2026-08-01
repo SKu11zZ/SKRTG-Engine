@@ -13,6 +13,7 @@ struct RetargetSkeletonAsset
 {
     std::string Id;
     std::string Label;
+    std::string SkeletonSignatureSha256;
     std::filesystem::path RestFbx;
     std::string RestFbxSha256;
     std::filesystem::path IkRigJson;
@@ -28,6 +29,7 @@ struct RetargetAnimationAsset
     std::string Id;
     std::string Label;
     std::string SourceSkeletonId;
+    std::string SourceSkeletonSignatureSha256;
     std::filesystem::path Fbx;
     std::string FbxSha256;
     std::filesystem::path GoldenJson;
@@ -46,6 +48,7 @@ struct RetargetAssetCatalog
     std::filesystem::path CatalogFile;
     std::string CatalogSha256;
     std::filesystem::path AssetRoot;
+    std::vector<std::string> ExternalSkeletonIds;
     std::vector<RetargetSkeletonAsset> Skeletons;
     std::vector<RetargetAnimationAsset> Animations;
 };
@@ -69,7 +72,8 @@ std::filesystem::path DiscoverRetargetAssetCatalog(
 
 RetargetAssetCatalogLoadResult LoadRetargetAssetCatalog(
     const std::filesystem::path& CatalogFile,
-    bool VerifyFilesAndHashes = true);
+    bool VerifyFilesAndHashes = true,
+    const std::vector<std::string>& ExternalSkeletonIds = {});
 
 const RetargetSkeletonAsset* FindRetargetSkeletonAsset(
     const RetargetAssetCatalog& Catalog,

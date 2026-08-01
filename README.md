@@ -19,6 +19,11 @@ review packages, and compiled releases are not included.
   read-only SKRV review boundary.
 - `skrtg_batch_retarget` — low-memory batch runner with one active Worker.
 - `skrv_pack` and `skrv_inspect` — SKRV v1 packaging and inspection tools.
+- `.skrtgprofile` v1 — installable, hash-bound character profile used as
+  either a source or a target.
+- `skrtgprofile_pack`, `skrtgprofile_inspect`, and
+  `skrtgprofile_install` — profile authoring, audit, and headless
+  installation tools.
 
 ## Input contract
 
@@ -34,6 +39,36 @@ The production-facing route is explicit and fail-closed:
 
 No skeleton-name inference, direct Unreal asset parsing, or silent fallback
 route is enabled.
+
+## Character profiles
+
+A `.skrtgprofile` keeps one character's rest FBX, UE-exported IK Rig JSON,
+canonical-to-character IK Retargeter JSON, metadata, and integrity inventory
+in one verified package. Animations remain external and are filtered by their
+declared source profile ID.
+
+Create and verify a package:
+
+```powershell
+skrtgprofile_pack `
+  --id my_character `
+  --version 1.0.0 `
+  --label "My Character" `
+  --rest "D:/private/rest.fbx" `
+  --rig "D:/private/IK_MyCharacter.ikrig.json" `
+  --alignment "D:/private/RTG_Canonical_MyCharacter.ikretargeter.json" `
+  --out "D:/private/my_character.skrtgprofile"
+
+skrtgprofile_inspect "D:/private/my_character.skrtgprofile"
+skrtgprofile_install "D:/private/my_character.skrtgprofile"
+```
+
+The native Viewer can also browse, verify, install, refresh, and remove
+profiles. Multiple versions may be installed; the highest SemVer version is
+active. Bridge request v5 binds the selected source and target package hashes
+and independently re-verifies both packages before starting the Worker.
+
+See [docs/SKRTGPROFILE_V1.md](docs/SKRTGPROFILE_V1.md) for the exact contract.
 
 ## Build
 
@@ -75,8 +110,16 @@ only into the local build output; it is ignored by Git.
 - UE configuration is JSON-export based, not direct engine-asset access.
 - The exact animation path is currently tied to the UE 5.8 import contract and
   checks every exported key against Golden data.
+- A profile contains character configuration, not animation clips. A usable
+  source still needs a separately cataloged, hash-bound animation whose
+  `sourceSkeletonId` and `sourceSkeletonSignatureSha256` equal the selected
+  profile identity and skeleton fingerprint.
+- An animation-only catalog can declare `externalSkeletonIds`; profile-backed
+  characters do not need duplicate loose skeleton resources in that catalog.
 - The Viewer consumes SKRV and does not recompute retargeting.
 - Batch execution is serial by design.
+- `.skrtgprofile` bindings currently apply to the single-job Viewer/Bridge v5
+  flow; the legacy batch panel still uses its existing loose-input contract.
 - Material, texture, morph-target, portable runtime, and cross-platform
   release gates remain open work.
 

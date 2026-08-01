@@ -9,9 +9,12 @@ UE export tool
   -> rest/animation Golden JSON
 
 External SHA-256 asset catalog
-  + source rest FBX
   + source animation FBX
-  + target rest FBX
+  + animation Golden JSON
+
+Installed .skrtgprofile v1 packages
+  + source rest / IK Rig / alignment
+  + target rest / IK Rig / alignment
   -> Bridge preflight
   -> UE IK JSON Worker
   -> verified target FBX + review payload
@@ -22,6 +25,20 @@ External SHA-256 asset catalog
 The Worker owns algorithms and FBX I/O. The Viewer owns presentation,
 selection, playback, and verified-export UX. SKRV v1 is the read-only boundary
 between them.
+
+The Viewer merges installed character profiles into the selectable skeleton
+inventory while leaving animation files in the external catalog. Selecting a
+source profile rebuilds the animation list from exact `sourceSkeletonId` and
+`sourceSkeletonSignatureSha256` matches, so clips declared for another
+character or an incompatible hierarchy are never shown. Catalogs may declare
+`externalSkeletonIds` and contain animation records without duplicating loose
+profile resources.
+
+The Viewer writes a v5 Bridge request when either selected character comes
+from a profile. The Bridge does not trust the Viewer's in-memory merge: it
+re-hashes and inspects each bound package, checks profile identity, version,
+role capability, and extracted resource hashes, then verifies the animation
+against the original external catalog.
 
 ## Coordinate path
 
@@ -56,3 +73,10 @@ retarget solve.
 - batch jobs run one Worker at a time;
 - staged operations commit only after validation;
 - missing private catalogs produce an empty Viewer, not inferred defaults.
+- profile installation uses a verified partial directory and atomic rename;
+- damaged extracted profile resources are excluded during discovery;
+- reinstalling the identical package atomically repairs damaged extraction;
+- profile discovery accepts only the exact ID/version directory depth;
+- profile staging and managed deletion reject symlinks and reparse points;
+- extracted profile content must exactly match the six package records;
+- profile deletion is limited to an exact receipt-bound managed directory.

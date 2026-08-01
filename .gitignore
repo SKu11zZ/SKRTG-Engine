@@ -5,6 +5,7 @@
 /.vs/
 /.vscode/
 /CMakeUserPresets.json
+/imgui.ini
 
 # Runtime/private catalogs
 /runtime_data/
@@ -17,6 +18,7 @@
 *.umap
 *.uproject
 *.skrv
+*.skrtgprofile
 *.animgolden.json
 *.ikrig.json
 *.ikretargeter.json

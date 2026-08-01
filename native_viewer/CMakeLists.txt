@@ -74,6 +74,14 @@ target_include_directories(skrtg_skrv
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 target_compile_features(skrtg_skrv PUBLIC cxx_std_20)
 
+add_library(skrtg_profile STATIC
+    src/character_profile.cpp)
+target_include_directories(skrtg_profile
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+target_link_libraries(skrtg_profile PUBLIC skrtg_skrv)
+target_compile_features(skrtg_profile PUBLIC cxx_std_20)
+
 function(skrtg_configure_viewer_target target_name)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE
@@ -87,6 +95,7 @@ function(skrtg_configure_viewer_target target_name)
 endfunction()
 
 skrtg_configure_viewer_target(skrtg_skrv)
+skrtg_configure_viewer_target(skrtg_profile)
 skrtg_configure_viewer_target(skrtg_imgui)
 
 add_library(skrtg_viewer_core STATIC
@@ -103,7 +112,7 @@ add_library(skrtg_viewer_core STATIC
 target_include_directories(skrtg_viewer_core
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
-target_link_libraries(skrtg_viewer_core PUBLIC skrtg_skrv)
+target_link_libraries(skrtg_viewer_core PUBLIC skrtg_skrv skrtg_profile)
 target_compile_features(skrtg_viewer_core PUBLIC cxx_std_20)
 skrtg_configure_viewer_target(skrtg_viewer_core)
 
@@ -114,6 +123,24 @@ skrtg_configure_viewer_target(skrv_pack)
 add_executable(skrv_inspect tools/skrv_inspect.cpp)
 target_link_libraries(skrv_inspect PRIVATE skrtg_skrv)
 skrtg_configure_viewer_target(skrv_inspect)
+
+add_executable(skrtgprofile_pack tools/skrtgprofile_pack.cpp)
+target_include_directories(skrtgprofile_pack PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+target_link_libraries(skrtgprofile_pack PRIVATE skrtg_profile)
+skrtg_configure_viewer_target(skrtgprofile_pack)
+
+add_executable(skrtgprofile_inspect tools/skrtgprofile_inspect.cpp)
+target_include_directories(skrtgprofile_inspect PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+target_link_libraries(skrtgprofile_inspect PRIVATE skrtg_profile)
+skrtg_configure_viewer_target(skrtgprofile_inspect)
+
+add_executable(skrtgprofile_install tools/skrtgprofile_install.cpp)
+target_include_directories(skrtgprofile_install PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+target_link_libraries(skrtgprofile_install PRIVATE skrtg_profile)
+skrtg_configure_viewer_target(skrtgprofile_install)
 
 add_executable(skrtg_retarget_bridge tools/skrtg_retarget_bridge_main.cpp)
 target_include_directories(skrtg_retarget_bridge PRIVATE
@@ -136,7 +163,8 @@ target_include_directories(skrtg_viewer PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(skrtg_viewer PRIVATE
     skrtg_viewer_core
-    skrtg_imgui)
+    skrtg_imgui
+    skrtg_profile)
 skrtg_configure_viewer_target(skrtg_viewer)
 
 add_custom_command(TARGET skrtg_viewer POST_BUILD
@@ -172,11 +200,31 @@ if(SKRTG_NATIVE_VIEWER_BUILD_TESTS)
     target_link_libraries(skrv_package_tests PRIVATE skrtg_skrv)
     skrtg_configure_viewer_target(skrv_package_tests)
     add_test(NAME skrv_package_tests COMMAND skrv_package_tests)
+
+    add_executable(
+        skrtgprofile_tests tests/skrtgprofile_tests.cpp)
+    target_include_directories(skrtgprofile_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+    target_link_libraries(skrtgprofile_tests PRIVATE skrtg_profile)
+    skrtg_configure_viewer_target(skrtgprofile_tests)
+    add_test(NAME skrtgprofile_tests COMMAND skrtgprofile_tests)
+
+    add_executable(
+        profile_bridge_tests tests/profile_bridge_tests.cpp)
+    target_include_directories(profile_bridge_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+    target_link_libraries(
+        profile_bridge_tests PRIVATE skrtg_viewer_core)
+    skrtg_configure_viewer_target(profile_bridge_tests)
+    add_test(NAME profile_bridge_tests COMMAND profile_bridge_tests)
 endif()
 
 install(TARGETS
     skrv_pack
     skrv_inspect
+    skrtgprofile_pack
+    skrtgprofile_inspect
+    skrtgprofile_install
     skrtg_retarget_bridge
     skrtg_batch_retarget
     skrtg_viewer

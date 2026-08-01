@@ -10,6 +10,7 @@ It does not store:
 - Unreal projects, packages, maps, or direct engine assets;
 - exported IK Rig, IK Retargeter, or animation Golden JSON;
 - SKRV review packages;
+- `.skrtgprofile` character packages and their installed contents;
 - screenshots, videos, audit captures, or sample output;
 - compiled executables, SDK binaries, or redistributable archives.
 
@@ -21,3 +22,9 @@ publishing.
 
 The application does not download example assets or synthesize mappings when
 the catalog is absent.
+
+The `.skrtgprofile` implementation, schema documentation, packer, inspector,
+installer, and tests are public source. Real character packages remain private
+because they contain FBX and exported UE configuration. `*.skrtgprofile` is
+therefore ignored even if a package is created inside the repository by
+mistake.

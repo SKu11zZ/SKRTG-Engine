@@ -1,5 +1,6 @@
 #include "skrtg/viewer/retarget_bridge.h"
 
+#include "skrtg/viewer/profile/character_profile.h"
 #include "skrtg/viewer/retarget_asset_catalog.h"
 #include "skrtg/viewer/skrv/package.h"
 #include "skrtg/viewer/skrv/sha256.h"
@@ -25,6 +26,8 @@ constexpr const char* UEIKJsonExactRequestSchema =
     "skrtg.native_viewer.retarget_bridge_request.v3";
 constexpr const char* UEIKJsonCatalogRequestSchema =
     "skrtg.native_viewer.retarget_bridge_request.v4";
+constexpr const char* UEIKJsonProfileRequestSchema =
+    "skrtg.native_viewer.retarget_bridge_request.v5";
 constexpr const char* ExternalStatusSchema =
     "skrtg.native_viewer.retarget_bridge_status.v1";
 constexpr const char* UEIKJsonStatusSchema =
@@ -33,6 +36,8 @@ constexpr const char* UEIKJsonExactStatusSchema =
     "skrtg.native_viewer.retarget_bridge_status.v3";
 constexpr const char* UEIKJsonCatalogStatusSchema =
     "skrtg.native_viewer.retarget_bridge_status.v4";
+constexpr const char* UEIKJsonProfileStatusSchema =
+    "skrtg.native_viewer.retarget_bridge_status.v5";
 
 bool IsRegularFile(const std::filesystem::path& Path)
 {
@@ -137,6 +142,12 @@ bool HasJsonExtension(const std::filesystem::path& Path)
     return LowerAscii(Path.extension().string()) == ".json";
 }
 
+bool HasProfileExtension(const std::filesystem::path& Path)
+{
+    return LowerAscii(Path.extension().string()) ==
+        ".skrtgprofile";
+}
+
 bool IsContractId(const std::string& Value)
 {
     return !Value.empty() &&
@@ -171,7 +182,7 @@ void AddHashBindingError(
     {
         Errors.push_back(
             std::string(Label) +
-            " does not match the selected asset catalog SHA-256");
+            " does not match the selected asset binding SHA-256");
     }
 }
 
@@ -188,7 +199,7 @@ void AddFileBindingError(
     {
         Errors.push_back(
             std::string(Label) +
-            " path does not match the selected asset catalog");
+            " path does not match the selected asset binding");
     }
 }
 
@@ -215,6 +226,104 @@ bool ComputeHash(
                          Error);
         return false;
     }
+    return true;
+}
+
+bool ResolveBoundSkeleton(
+    const RetargetAssetCatalog& Catalog,
+    const std::string& SkeletonId,
+    const std::filesystem::path& ProfilePackage,
+    const std::string& ProfilePackageSha256,
+    const std::string& ProfileVersion,
+    const bool SourceRole,
+    RetargetSkeletonAsset& Out,
+    std::vector<std::string>& Errors)
+{
+    const char* Role = SourceRole ? "source" : "target";
+    const std::size_t InitialErrorCount = Errors.size();
+    if (ProfilePackage.empty())
+    {
+        const RetargetSkeletonAsset* CatalogSkeleton =
+            FindRetargetSkeletonAsset(Catalog, SkeletonId);
+        if (CatalogSkeleton == nullptr)
+        {
+            Errors.push_back(
+                std::string(Role) +
+                " skeleton is absent from both the catalog and a "
+                "character profile binding");
+            return false;
+        }
+        if ((SourceRole && !CatalogSkeleton->SourceEnabled) ||
+            (!SourceRole && !CatalogSkeleton->TargetEnabled))
+        {
+            Errors.push_back(
+                std::string(Role) +
+                " skeleton is disabled for the selected role");
+            return false;
+        }
+        Out = *CatalogSkeleton;
+        return true;
+    }
+
+    const profile::ProfileInspectResult Inspection =
+        profile::InspectCharacterProfilePackage(ProfilePackage);
+    if (!Inspection.Success)
+    {
+        for (const std::string& Error : Inspection.Errors)
+        {
+            Errors.push_back(
+                std::string(Role) +
+                " character profile is invalid: " + Error);
+        }
+        return false;
+    }
+    const profile::CharacterProfileDescriptor& Descriptor =
+        Inspection.Profile;
+    if (LowerAscii(Inspection.PackageSha256) !=
+        LowerAscii(ProfilePackageSha256))
+    {
+        Errors.push_back(
+            std::string(Role) +
+            " character profile package SHA-256 changed");
+    }
+    if (Descriptor.ProfileId != SkeletonId ||
+        Descriptor.ProfileVersion != ProfileVersion)
+    {
+        Errors.push_back(
+            std::string(Role) +
+            " character profile identity does not match the request");
+    }
+    if ((SourceRole && !Descriptor.SourceEnabled) ||
+        (!SourceRole && !Descriptor.TargetEnabled))
+    {
+        Errors.push_back(
+            std::string(Role) +
+            " character profile is disabled for the selected role");
+    }
+    if (Errors.size() != InitialErrorCount) return false;
+
+    const std::filesystem::path ContentRoot =
+        ProfilePackage.parent_path() / "content";
+    Out.Id = Descriptor.ProfileId;
+    Out.Label = Descriptor.DisplayName;
+    Out.SkeletonSignatureSha256 =
+        Descriptor.SkeletonSignatureSha256;
+    Out.RestFbx = (
+        ContentRoot / Descriptor.RestFbx.RelativePath)
+        .lexically_normal();
+    Out.RestFbxSha256 = Descriptor.RestFbx.Sha256;
+    Out.IkRigJson = (
+        ContentRoot / Descriptor.IkRigJson.RelativePath)
+        .lexically_normal();
+    Out.IkRigJsonSha256 = Descriptor.IkRigJson.Sha256;
+    Out.AlignmentRetargeterJson = (
+        ContentRoot /
+        Descriptor.AlignmentRetargeterJson.RelativePath)
+        .lexically_normal();
+    Out.AlignmentRetargeterJsonSha256 =
+        Descriptor.AlignmentRetargeterJson.Sha256;
+    Out.SourceEnabled = Descriptor.SourceEnabled;
+    Out.TargetEnabled = Descriptor.TargetEnabled;
     return true;
 }
 
@@ -323,8 +432,13 @@ nlohmann::json RequestJson(const RetargetBridgeRequest& Request)
         {
             const RetargetBridgeAssetBinding& Binding =
                 Request.AssetBinding;
-            Json["schema"] = UEIKJsonCatalogRequestSchema;
-            Json["assetSelection"] = {
+            const bool UsesProfiles =
+                !Binding.SourceProfilePackage.empty() ||
+                !Binding.TargetProfilePackage.empty();
+            Json["schema"] = UsesProfiles
+                ? UEIKJsonProfileRequestSchema
+                : UEIKJsonCatalogRequestSchema;
+            nlohmann::json Selection = {
                 {"catalogFile", PathToUtf8(Binding.CatalogFile)},
                 {"catalogSha256", Binding.CatalogSha256},
                 {"catalogId", Binding.CatalogId},
@@ -345,8 +459,30 @@ nlohmann::json RequestJson(const RetargetBridgeRequest& Request)
                      Binding.TargetAlignmentRetargeterJsonSha256},
                     {"sourceAnimationGoldenJson",
                      Binding.SourceAnimationGoldenJsonSha256}
-                }}
+                 }}
             };
+            if (UsesProfiles)
+            {
+                Selection["characterProfiles"] = {
+                    {"source", {
+                        {"packageFile",
+                         PathToUtf8(Binding.SourceProfilePackage)},
+                        {"packageSha256",
+                         Binding.SourceProfilePackageSha256},
+                        {"profileVersion",
+                         Binding.SourceProfileVersion}
+                    }},
+                    {"target", {
+                        {"packageFile",
+                         PathToUtf8(Binding.TargetProfilePackage)},
+                        {"packageSha256",
+                         Binding.TargetProfilePackageSha256},
+                        {"profileVersion",
+                         Binding.TargetProfileVersion}
+                    }}
+                };
+            }
+            Json["assetSelection"] = std::move(Selection);
         }
     }
     return Json;
@@ -364,9 +500,15 @@ nlohmann::json RunStatusJson(
         Request.SourceFbxImportMode ==
             RetargetBridgeSourceFbxImportMode::
                 UE58ExactGoldenV1;
-    return {
+    const bool UsesProfiles =
+        !Request.AssetBinding.SourceProfilePackage.empty() ||
+        !Request.AssetBinding.TargetProfilePackage.empty();
+    nlohmann::json Status = {
         {"schema", Request.AssetBinding.Required
-            ? UEIKJsonCatalogStatusSchema
+            ? ((!Request.AssetBinding.SourceProfilePackage.empty() ||
+                !Request.AssetBinding.TargetProfilePackage.empty())
+                ? UEIKJsonProfileStatusSchema
+                : UEIKJsonCatalogStatusSchema)
             : (ExactImport
             ? UEIKJsonExactStatusSchema
             : (UEIKJson
@@ -387,12 +529,30 @@ nlohmann::json RunStatusJson(
             {"sourceAnimationId",
              Request.AssetBinding.SourceAnimationId},
             {"sourceAnimationSkeletonId",
-             Request.AssetBinding.SourceAnimationSkeletonId}
+             Request.AssetBinding.SourceAnimationSkeletonId},
+            {"sourceProfilePackage",
+             PathToUtf8(
+                 Request.AssetBinding.SourceProfilePackage)},
+            {"sourceProfilePackageSha256",
+             Request.AssetBinding.SourceProfilePackageSha256},
+            {"sourceProfileVersion",
+             Request.AssetBinding.SourceProfileVersion},
+            {"targetProfilePackage",
+             PathToUtf8(
+                 Request.AssetBinding.TargetProfilePackage)},
+            {"targetProfilePackageSha256",
+             Request.AssetBinding.TargetProfilePackageSha256},
+            {"targetProfileVersion",
+             Request.AssetBinding.TargetProfileVersion}
         }},
         {"success", Result.Success},
         {"reviewPackage", PathToUtf8(Result.ReviewPackage)},
         {"sourceAnimationFbx", PathToUtf8(Request.SourceAnimationFbx)},
         {"assetCatalogSha256", Preflight.AssetCatalogSha256},
+        {"sourceProfilePackageSha256",
+         Preflight.SourceProfilePackageSha256},
+        {"targetProfilePackageSha256",
+         Preflight.TargetProfilePackageSha256},
         {"sourceAnimationSha256", Preflight.SourceAnimationSha256},
         {"sourceRestFbx", PathToUtf8(Request.SourceRestFbx)},
         {"sourceRestSha256", Preflight.SourceRestSha256},
@@ -433,6 +593,24 @@ nlohmann::json RunStatusJson(
         }},
         {"errors", Result.Errors}
     };
+    if (!UsesProfiles)
+    {
+        Status["assetSelection"].erase(
+            "sourceProfilePackage");
+        Status["assetSelection"].erase(
+            "sourceProfilePackageSha256");
+        Status["assetSelection"].erase(
+            "sourceProfileVersion");
+        Status["assetSelection"].erase(
+            "targetProfilePackage");
+        Status["assetSelection"].erase(
+            "targetProfilePackageSha256");
+        Status["assetSelection"].erase(
+            "targetProfileVersion");
+        Status.erase("sourceProfilePackageSha256");
+        Status.erase("targetProfilePackageSha256");
+    }
+    return Status;
 }
 
 bool DirectoryEmptyOrAbsent(const std::filesystem::path& Path)
@@ -704,14 +882,17 @@ RetargetBridgePreflight PreflightRetargetBridge(
                 "animation and exported-rest import modes");
         }
         if (!IsContractId(Binding.CatalogId) ||
-            !IsContractId(Binding.SourceSkeletonId) ||
-            !IsContractId(Binding.TargetSkeletonId) ||
+            !profile::IsCharacterProfileId(
+                Binding.SourceSkeletonId) ||
+            !profile::IsCharacterProfileId(
+                Binding.TargetSkeletonId) ||
             !IsContractId(Binding.SourceAnimationId) ||
-            !IsContractId(Binding.SourceAnimationSkeletonId))
+            !profile::IsCharacterProfileId(
+                Binding.SourceAnimationSkeletonId))
         {
             Result.Errors.push_back(
-                "asset catalog IDs must contain only lowercase ASCII "
-                "letters, digits, and underscore");
+                "asset selection IDs are invalid or outside the "
+                "portable lowercase profile-id contract");
         }
         if (!IsSha256(Binding.CatalogSha256))
         {
@@ -750,6 +931,49 @@ RetargetBridgePreflight PreflightRetargetBridge(
                                 "invalid for ") + Label);
             }
         }
+        const auto ValidateProfileBinding =
+            [&](const std::filesystem::path& Package,
+                const std::string& Hash,
+                const std::string& Version,
+                const char* Label)
+            {
+                if (Package.empty())
+                {
+                    if (!Hash.empty() || !Version.empty())
+                    {
+                        Result.Errors.push_back(
+                            std::string(Label) +
+                            " profile binding is incomplete");
+                    }
+                    return;
+                }
+                if (!HasProfileExtension(Package))
+                {
+                    Result.Errors.push_back(
+                        std::string(Label) +
+                        " profile package must use .skrtgprofile");
+                }
+                if (!IsSha256(Hash))
+                {
+                    Result.Errors.push_back(
+                        std::string(Label) +
+                        " profile package SHA-256 is invalid");
+                }
+                if (!profile::IsCharacterProfileVersion(Version))
+                {
+                    Result.Errors.push_back(
+                        std::string(Label) +
+                        " profile version is invalid");
+                }
+            };
+        ValidateProfileBinding(
+            Binding.SourceProfilePackage,
+            Binding.SourceProfilePackageSha256,
+            Binding.SourceProfileVersion, "source");
+        ValidateProfileBinding(
+            Binding.TargetProfilePackage,
+            Binding.TargetProfilePackageSha256,
+            Binding.TargetProfileVersion, "target");
     }
     if (Request.AssetBinding.Required)
     {
@@ -761,6 +985,20 @@ RetargetBridgePreflight PreflightRetargetBridge(
             Result.Errors.push_back(
                 "retarget asset catalog must use an exported .json "
                 "file");
+        }
+        if (!Request.AssetBinding.SourceProfilePackage.empty())
+        {
+            AddFileError(
+                Request.AssetBinding.SourceProfilePackage,
+                "source character profile package",
+                Result.Errors);
+        }
+        if (!Request.AssetBinding.TargetProfilePackage.empty())
+        {
+            AddFileError(
+                Request.AssetBinding.TargetProfilePackage,
+                "target character profile package",
+                Result.Errors);
         }
     }
     AddFileError(
@@ -911,6 +1149,22 @@ RetargetBridgePreflight PreflightRetargetBridge(
             Request.AssetBinding.CatalogFile,
             Result.AssetCatalogSha256,
             Result.Errors, "retarget asset catalog JSON");
+        if (!Request.AssetBinding.SourceProfilePackage.empty())
+        {
+            ComputeHash(
+                Request.AssetBinding.SourceProfilePackage,
+                Result.SourceProfilePackageSha256,
+                Result.Errors,
+                "source character profile package");
+        }
+        if (!Request.AssetBinding.TargetProfilePackage.empty())
+        {
+            ComputeHash(
+                Request.AssetBinding.TargetProfilePackage,
+                Result.TargetProfilePackageSha256,
+                Result.Errors,
+                "target character profile package");
+        }
     }
     ComputeHash(
         Request.SourceAnimationFbx,
@@ -996,10 +1250,37 @@ RetargetBridgePreflight PreflightRetargetBridge(
             Result.SourceAnimationGoldenJsonSha256,
             Binding.SourceAnimationGoldenJsonSha256,
             "source animation golden JSON", Result.Errors);
+        if (!Binding.SourceProfilePackage.empty())
+        {
+            AddHashBindingError(
+                Result.SourceProfilePackageSha256,
+                Binding.SourceProfilePackageSha256,
+                "source character profile package",
+                Result.Errors);
+        }
+        if (!Binding.TargetProfilePackage.empty())
+        {
+            AddHashBindingError(
+                Result.TargetProfilePackageSha256,
+                Binding.TargetProfilePackageSha256,
+                "target character profile package",
+                Result.Errors);
+        }
 
+        std::vector<std::string> ExternalSkeletonIds;
+        if (!Binding.SourceProfilePackage.empty())
+            ExternalSkeletonIds.push_back(
+                Binding.SourceSkeletonId);
+        if (!Binding.TargetProfilePackage.empty() &&
+            Binding.TargetSkeletonId != Binding.SourceSkeletonId)
+        {
+            ExternalSkeletonIds.push_back(
+                Binding.TargetSkeletonId);
+        }
         const RetargetAssetCatalogLoadResult CatalogResult =
             LoadRetargetAssetCatalog(
-                Binding.CatalogFile, false);
+                Binding.CatalogFile, false,
+                ExternalSkeletonIds);
         if (!CatalogResult.Success)
         {
             for (const std::string& Error : CatalogResult.Errors)
@@ -1025,31 +1306,66 @@ RetargetBridgePreflight PreflightRetargetBridge(
                     "request catalogId does not match the selected "
                     "asset catalog");
             }
-            const RetargetAssetSelectionValidation Selection =
-                ValidateRetargetAssetSelection(
-                    Catalog,
-                    Binding.SourceSkeletonId,
-                    Binding.SourceAnimationId,
-                    Binding.TargetSkeletonId);
-            for (const std::string& Error : Selection.Errors)
+            const RetargetAnimationAsset* Animation =
+                FindRetargetAnimationAsset(
+                    Catalog, Binding.SourceAnimationId);
+            bool AnimationValid = true;
+            if (Animation == nullptr)
             {
                 Result.Errors.push_back(
-                    "asset catalog selection mismatch: " + Error);
+                    "asset catalog selection mismatch: source "
+                    "animation is not in the catalog");
+                AnimationValid = false;
             }
-            if (Selection.Success)
+            else if (!Animation->Enabled)
             {
-                const RetargetSkeletonAsset& Source =
-                    *FindRetargetSkeletonAsset(
-                        Catalog, Binding.SourceSkeletonId);
-                const RetargetSkeletonAsset& Target =
-                    *FindRetargetSkeletonAsset(
-                        Catalog, Binding.TargetSkeletonId);
-                const RetargetAnimationAsset& Animation =
-                    *FindRetargetAnimationAsset(
-                        Catalog, Binding.SourceAnimationId);
+                Result.Errors.push_back(
+                    "asset catalog selection mismatch: source "
+                    "animation is disabled");
+                AnimationValid = false;
+            }
+            else if (Animation->SourceSkeletonId !=
+                     Binding.SourceSkeletonId)
+            {
+                Result.Errors.push_back(
+                    "asset catalog selection mismatch: source "
+                    "animation belongs to " +
+                    Animation->SourceSkeletonId + ", not " +
+                    Binding.SourceSkeletonId);
+                AnimationValid = false;
+            }
+
+            RetargetSkeletonAsset Source;
+            RetargetSkeletonAsset Target;
+            const bool SourceValid = ResolveBoundSkeleton(
+                Catalog, Binding.SourceSkeletonId,
+                Binding.SourceProfilePackage,
+                Binding.SourceProfilePackageSha256,
+                Binding.SourceProfileVersion, true,
+                Source, Result.Errors);
+            const bool TargetValid = ResolveBoundSkeleton(
+                Catalog, Binding.TargetSkeletonId,
+                Binding.TargetProfilePackage,
+                Binding.TargetProfilePackageSha256,
+                Binding.TargetProfileVersion, false,
+                Target, Result.Errors);
+            if (AnimationValid && SourceValid && TargetValid)
+            {
+                if (Animation->SourceSkeletonSignatureSha256 !=
+                    Source.SkeletonSignatureSha256)
+                {
+                    Result.Errors.push_back(
+                        "asset catalog selection mismatch: source "
+                        "animation skeleton signature does not match "
+                        "the selected source profile");
+                    AnimationValid = false;
+                }
+            }
+            if (AnimationValid && SourceValid && TargetValid)
+            {
                 AddFileBindingError(
                     Request.SourceAnimationFbx,
-                    Animation.Fbx,
+                    Animation->Fbx,
                     "source animation", Result.Errors);
                 AddFileBindingError(
                     Request.SourceRestFbx,
@@ -1079,13 +1395,13 @@ RetargetBridgePreflight PreflightRetargetBridge(
                     Result.Errors);
                 AddFileBindingError(
                     Request.SourceAnimationGoldenJson,
-                    Animation.GoldenJson,
+                    Animation->GoldenJson,
                     "source animation golden JSON",
                     Result.Errors);
 
                 AddHashBindingError(
                     Binding.SourceAnimationSha256,
-                    Animation.FbxSha256,
+                    Animation->FbxSha256,
                     "source animation request binding",
                     Result.Errors);
                 AddHashBindingError(
@@ -1120,20 +1436,20 @@ RetargetBridgePreflight PreflightRetargetBridge(
                     Result.Errors);
                 AddHashBindingError(
                     Binding.SourceAnimationGoldenJsonSha256,
-                    Animation.GoldenJsonSha256,
+                    Animation->GoldenJsonSha256,
                     "source animation golden request binding",
                     Result.Errors);
                 if (Request.AnimationStack !=
-                    Animation.AnimationStack)
+                    Animation->AnimationStack)
                 {
                     Result.Errors.push_back(
                         "animation Stack does not match the selected "
                         "asset catalog animation");
                 }
                 if (Request.SourceFbxImportMode !=
-                        Animation.SourceFbxImportMode ||
+                        Animation->SourceFbxImportMode ||
                     Request.RestFbxImportMode !=
-                        Animation.RestFbxImportMode)
+                        Animation->RestFbxImportMode)
                 {
                     Result.Errors.push_back(
                         "UE FBX import modes do not match the selected "
@@ -1203,8 +1519,11 @@ bool ReadRetargetBridgeRequest(
             Schema == UEIKJsonExactRequestSchema;
         const bool IsUEIKJsonV4 =
             Schema == UEIKJsonCatalogRequestSchema;
+        const bool IsUEIKJsonV5 =
+            Schema == UEIKJsonProfileRequestSchema;
         const bool IsUEIKJson =
-            IsUEIKJsonV2 || IsUEIKJsonV3 || IsUEIKJsonV4;
+            IsUEIKJsonV2 || IsUEIKJsonV3 ||
+            IsUEIKJsonV4 || IsUEIKJsonV5;
         if (!IsFrozenV1 && !IsUEIKJson)
         {
             OutError = "unsupported retarget bridge request schema";
@@ -1256,7 +1575,7 @@ bool ReadRetargetBridgeRequest(
                 UEIKJson.at("targetAlignmentRetargeterJson")
                     .get<std::string>());
         }
-        if (IsUEIKJsonV3 || IsUEIKJsonV4)
+        if (IsUEIKJsonV3 || IsUEIKJsonV4 || IsUEIKJsonV5)
         {
             const nlohmann::json& Import =
                 Json.at("ueFbxImport");
@@ -1277,7 +1596,7 @@ bool ReadRetargetBridgeRequest(
                     Import.at("sourceAnimationGoldenJson")
                         .get<std::string>());
         }
-        if (IsUEIKJsonV4)
+        if (IsUEIKJsonV4 || IsUEIKJsonV5)
         {
             const nlohmann::json& Selection =
                 Json.at("assetSelection");
@@ -1301,6 +1620,27 @@ bool ReadRetargetBridgeRequest(
             Binding.SourceAnimationSkeletonId =
                 Selection.at("sourceAnimationSkeletonId")
                     .get<std::string>();
+            if (IsUEIKJsonV5)
+            {
+                const nlohmann::json& Profiles =
+                    Selection.at("characterProfiles");
+                const nlohmann::json& Source =
+                    Profiles.at("source");
+                const nlohmann::json& Target =
+                    Profiles.at("target");
+                Binding.SourceProfilePackage = PathFromUtf8(
+                    Source.at("packageFile").get<std::string>());
+                Binding.SourceProfilePackageSha256 =
+                    Source.at("packageSha256").get<std::string>();
+                Binding.SourceProfileVersion =
+                    Source.at("profileVersion").get<std::string>();
+                Binding.TargetProfilePackage = PathFromUtf8(
+                    Target.at("packageFile").get<std::string>());
+                Binding.TargetProfilePackageSha256 =
+                    Target.at("packageSha256").get<std::string>();
+                Binding.TargetProfileVersion =
+                    Target.at("profileVersion").get<std::string>();
+            }
             Binding.SourceAnimationSha256 =
                 Expected.at("sourceAnimation").get<std::string>();
             Binding.SourceRestSha256 =
@@ -1460,6 +1800,8 @@ RetargetBridgeRunResult RunRetargetBridge(
     ResolvePath(Resolved.TargetAlignmentRetargeterJson);
     ResolvePath(Resolved.SourceAnimationGoldenJson);
     ResolvePath(Resolved.AssetBinding.CatalogFile);
+    ResolvePath(Resolved.AssetBinding.SourceProfilePackage);
+    ResolvePath(Resolved.AssetBinding.TargetProfilePackage);
     ResolvePath(Resolved.OutputDirectory);
     ResolvePath(Resolved.Tools.BridgeExecutable);
     ResolvePath(Resolved.Tools.RetargeterExecutable);

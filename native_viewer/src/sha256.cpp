@@ -1,5 +1,6 @@
 #include "skrtg/viewer/skrv/sha256.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <fstream>
@@ -217,6 +218,39 @@ bool Sha256File(
     {
         OutError = "failed while hashing file: " + Path.string();
         return false;
+    }
+    OutUpperHexDigest = ToHex(State.Finalize());
+    return true;
+}
+
+bool Sha256StreamRange(
+    std::istream& Input,
+    const std::uint64_t ByteCount,
+    std::string& OutUpperHexDigest,
+    std::string& OutError)
+{
+    OutUpperHexDigest.clear();
+    OutError.clear();
+    Sha256State State;
+    std::array<char, 64 * 1024> Buffer{};
+    std::uint64_t Remaining = ByteCount;
+    while (Remaining > 0)
+    {
+        const std::size_t Requested = static_cast<std::size_t>(
+            std::min<std::uint64_t>(Remaining, Buffer.size()));
+        Input.read(
+            Buffer.data(), static_cast<std::streamsize>(Requested));
+        const std::streamsize Count = Input.gcount();
+        if (Count != static_cast<std::streamsize>(Requested))
+        {
+            OutError =
+                "stream ended before the declared byte range";
+            return false;
+        }
+        State.Update(std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(Buffer.data()),
+            Requested));
+        Remaining -= Requested;
     }
     OutUpperHexDigest = ToHex(State.Finalize());
     return true;

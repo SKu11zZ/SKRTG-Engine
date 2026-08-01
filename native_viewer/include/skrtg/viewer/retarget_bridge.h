@@ -48,6 +48,12 @@ struct RetargetBridgeAssetBinding
     std::string TargetSkeletonId;
     std::string SourceAnimationId;
     std::string SourceAnimationSkeletonId;
+    std::filesystem::path SourceProfilePackage;
+    std::string SourceProfilePackageSha256;
+    std::string SourceProfileVersion;
+    std::filesystem::path TargetProfilePackage;
+    std::string TargetProfilePackageSha256;
+    std::string TargetProfileVersion;
     std::string SourceAnimationSha256;
     std::string SourceRestSha256;
     std::string TargetRestSha256;
@@ -88,6 +94,8 @@ struct RetargetBridgePreflight
 {
     bool Success = false;
     std::string AssetCatalogSha256;
+    std::string SourceProfilePackageSha256;
+    std::string TargetProfilePackageSha256;
     std::string SourceAnimationSha256;
     std::string SourceRestSha256;
     std::string TargetSkeletonSha256;

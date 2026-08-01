@@ -1,6 +1,7 @@
 #include "retarget_bridge_ui.h"
 
 #include "skrtg/viewer/batch_retarget.h"
+#include "skrtg/viewer/profile/character_profile.h"
 #include "skrtg/viewer/retarget_asset_catalog.h"
 #include "skrtg/viewer/retarget_bridge.h"
 #include "skrtg/viewer/verified_export.h"
@@ -43,6 +44,7 @@ enum class BrowseTarget
     OutputRoot,
     BatchAnimationDirectory,
     BatchOutputRoot,
+    CharacterProfilePackage,
     OpenSkrv,
     ExportRoot
 };
@@ -51,6 +53,7 @@ enum class BrowseSelection
 {
     FbxFile,
     JsonFile,
+    CharacterProfile,
     Directory,
     SkrvPackage
 };
@@ -68,6 +71,7 @@ struct PathBuffers
     std::array<char, PathCapacity> OutputRoot{};
     std::array<char, PathCapacity> BatchAnimationDirectory{};
     std::array<char, PathCapacity> BatchOutputRoot{};
+    std::array<char, PathCapacity> CharacterProfilePackage{};
     std::array<char, PathCapacity> OpenSkrv{};
     std::array<char, PathCapacity> ExportRoot{};
 };
@@ -174,6 +178,21 @@ bool IsSkrvPackage(const std::filesystem::path& Path)
         !Error;
 }
 
+bool IsCharacterProfilePackage(
+    const std::filesystem::path& Path)
+{
+    std::string Extension = Path.extension().string();
+    std::transform(
+        Extension.begin(), Extension.end(), Extension.begin(),
+        [](const unsigned char Character)
+        {
+            return static_cast<char>(std::tolower(Character));
+        });
+    std::error_code Error;
+    return Extension == ".skrtgprofile" &&
+        std::filesystem::is_regular_file(Path, Error) && !Error;
+}
+
 bool IsDirectory(const std::filesystem::path& Path)
 {
     std::error_code Error;
@@ -199,6 +218,8 @@ std::array<char, PathCapacity>& BufferFor(
     case BrowseTarget::BatchAnimationDirectory:
         return Buffers.BatchAnimationDirectory;
     case BrowseTarget::BatchOutputRoot: return Buffers.BatchOutputRoot;
+    case BrowseTarget::CharacterProfilePackage:
+        return Buffers.CharacterProfilePackage;
     case BrowseTarget::OpenSkrv: return Buffers.OpenSkrv;
     case BrowseTarget::ExportRoot: return Buffers.ExportRoot;
     }
@@ -339,18 +360,27 @@ void DrawBrowser(BrowserState& Browser, PathBuffers& Buffers)
         const bool Skrv = Directory && IsSkrvPackage(Entry.path());
         const bool Fbx = File && IsFbx(Entry.path());
         const bool Json = File && IsJson(Entry.path());
+        const bool CharacterProfile =
+            File && IsCharacterProfilePackage(Entry.path());
         if (EntryError || (!Directory &&
             ((Browser.Selection == BrowseSelection::FbxFile && !Fbx) ||
              (Browser.Selection == BrowseSelection::JsonFile && !Json) ||
+             (Browser.Selection ==
+                  BrowseSelection::CharacterProfile &&
+              !CharacterProfile) ||
              (Browser.Selection != BrowseSelection::FbxFile &&
-              Browser.Selection != BrowseSelection::JsonFile))))
+              Browser.Selection != BrowseSelection::JsonFile &&
+              Browser.Selection !=
+                  BrowseSelection::CharacterProfile))))
             continue;
         const std::string Name =
             (Skrv && Browser.Selection == BrowseSelection::SkrvPackage
                 ? "[SKRV] "
                 : (Directory
                     ? "[目录] "
-                    : (Json ? "[JSON] " : "[FBX] "))) +
+                    : (CharacterProfile
+                        ? "[PROFILE] "
+                        : (Json ? "[JSON] " : "[FBX] ")))) +
             PathToUtf8(Entry.path().filename());
         const bool Selected = Browser.Selected == Entry.path();
         if (ImGui::Selectable(
@@ -397,6 +427,8 @@ void DrawBrowser(BrowserState& Browser, PathBuffers& Buffers)
           IsFbx(Browser.Selected)) ||
          (Browser.Selection == BrowseSelection::JsonFile &&
           IsJson(Browser.Selected)) ||
+         (Browser.Selection == BrowseSelection::CharacterProfile &&
+          IsCharacterProfilePackage(Browser.Selected)) ||
          (Browser.Selection == BrowseSelection::SkrvPackage &&
           IsSkrvPackage(Browser.Selected)) ||
          (Browser.Selection == BrowseSelection::Directory &&
@@ -405,6 +437,8 @@ void DrawBrowser(BrowserState& Browser, PathBuffers& Buffers)
     const char* SelectLabel =
         Browser.Selection == BrowseSelection::FbxFile ? "选择 FBX" :
         Browser.Selection == BrowseSelection::JsonFile ? "选择 JSON" :
+        Browser.Selection == BrowseSelection::CharacterProfile
+            ? "选择角色包" :
         Browser.Selection == BrowseSelection::SkrvPackage ? "打开 SKRV" :
         "选择文件夹";
     if (ImGui::Button(SelectLabel))
@@ -470,39 +504,11 @@ struct RetargetBridgeUi::Impl
         SetBuffer(Buffers.SourceAlignmentRetargeterJson, {});
         SetBuffer(Buffers.TargetAlignmentRetargeterJson, {});
         SetBuffer(Buffers.AnimationStack, {});
+        SetBuffer(Buffers.CharacterProfilePackage, {});
 
         CatalogFile = DiscoverRetargetAssetCatalog(ViewerExecutable);
-        RetargetAssetCatalogLoadResult CatalogResult =
-            LoadRetargetAssetCatalog(CatalogFile);
-        CatalogErrors = std::move(CatalogResult.Errors);
-        CatalogWarnings = std::move(CatalogResult.Warnings);
-        if (CatalogResult.Success)
-        {
-            Catalog = std::move(CatalogResult.Catalog);
-            CatalogLoaded = true;
-            UseUEIKJsonRoute = true;
-            for (std::size_t Index = 0;
-                 Index < Catalog.Skeletons.size(); ++Index)
-            {
-                const RetargetSkeletonAsset& Skeleton =
-                    Catalog.Skeletons[Index];
-                if (SourceSkeletonIndex < 0 &&
-                    Skeleton.SourceEnabled)
-                {
-                    SourceSkeletonIndex =
-                        static_cast<int>(Index);
-                }
-                if (TargetSkeletonIndex < 0 &&
-                    Skeleton.TargetEnabled)
-                {
-                    TargetSkeletonIndex =
-                        static_cast<int>(Index);
-                }
-            }
-            RefreshCompatibleAnimations(true);
-            Message =
-                "资产目录已验证：请选择源骨骼、对应动画和目标骨骼。";
-        }
+        ProfileStoreRoot = profile::DefaultCharacterProfileStore();
+        ReloadCatalogAndProfiles(true);
     }
 
     const RetargetSkeletonAsset* SelectedSourceSkeleton() const
@@ -539,6 +545,241 @@ struct RetargetBridgeUi::Impl
         }
         return &Catalog.Animations[
             static_cast<std::size_t>(AnimationIndex)];
+    }
+
+    const profile::InstalledCharacterProfile* ActiveProfileFor(
+        const std::string& ProfileId) const
+    {
+        const auto Found = std::find_if(
+            ActiveProfiles.begin(), ActiveProfiles.end(),
+            [&](const profile::InstalledCharacterProfile& Candidate)
+            {
+                return Candidate.Profile.ProfileId == ProfileId;
+            });
+        return Found == ActiveProfiles.end() ? nullptr : &*Found;
+    }
+
+    void ReloadCatalogAndProfiles(const bool SelectFirst)
+    {
+        const RetargetSkeletonAsset* PreviousSource =
+            SelectedSourceSkeleton();
+        const RetargetSkeletonAsset* PreviousTarget =
+            SelectedTargetSkeleton();
+        const RetargetAnimationAsset* PreviousAnimation =
+            SelectedAnimation();
+        const std::string PreviousSourceId =
+            PreviousSource != nullptr ? PreviousSource->Id : "";
+        const std::string PreviousTargetId =
+            PreviousTarget != nullptr ? PreviousTarget->Id : "";
+        const std::string PreviousAnimationId =
+            PreviousAnimation != nullptr ? PreviousAnimation->Id : "";
+
+        Catalog = {};
+        CatalogErrors.clear();
+        CatalogWarnings.clear();
+        ProfileErrors.clear();
+        ProfileWarnings.clear();
+        InstalledProfiles.clear();
+        ActiveProfiles.clear();
+
+        profile::ProfileDiscoveryResult Discovery =
+            profile::DiscoverInstalledCharacterProfiles(
+                ProfileStoreRoot);
+        ProfileErrors = std::move(Discovery.Errors);
+        ProfileWarnings = std::move(Discovery.Warnings);
+        InstalledProfiles = std::move(Discovery.Profiles);
+        for (const profile::InstalledCharacterProfile& Installed :
+             InstalledProfiles)
+        {
+            auto Existing = std::find_if(
+                ActiveProfiles.begin(), ActiveProfiles.end(),
+                [&](const profile::InstalledCharacterProfile& Candidate)
+                {
+                    return Candidate.Profile.ProfileId ==
+                        Installed.Profile.ProfileId;
+                });
+            if (Existing == ActiveProfiles.end())
+            {
+                ActiveProfiles.push_back(Installed);
+            }
+            else if (profile::CompareCharacterProfileVersions(
+                         Existing->Profile.ProfileVersion,
+                         Installed.Profile.ProfileVersion) < 0)
+            {
+                *Existing = Installed;
+            }
+        }
+
+        std::vector<std::string> ExternalSkeletonIds;
+        ExternalSkeletonIds.reserve(ActiveProfiles.size());
+        for (const profile::InstalledCharacterProfile& Installed :
+             ActiveProfiles)
+        {
+            ExternalSkeletonIds.push_back(
+                Installed.Profile.ProfileId);
+        }
+        RetargetAssetCatalogLoadResult CatalogResult =
+            LoadRetargetAssetCatalog(
+                CatalogFile, true, ExternalSkeletonIds);
+        CatalogErrors = std::move(CatalogResult.Errors);
+        CatalogWarnings = std::move(CatalogResult.Warnings);
+        if (CatalogResult.Success)
+        {
+            Catalog = std::move(CatalogResult.Catalog);
+        }
+        else
+        {
+            Catalog.CatalogId = "profile_store";
+            Catalog.CatalogFile =
+                std::filesystem::absolute(CatalogFile)
+                    .lexically_normal();
+            Catalog.AssetRoot = Catalog.CatalogFile.parent_path();
+        }
+
+        for (const profile::InstalledCharacterProfile& Installed :
+             ActiveProfiles)
+        {
+            RetargetSkeletonAsset Skeleton;
+            Skeleton.Id = Installed.Profile.ProfileId;
+            Skeleton.Label = Installed.Profile.DisplayName +
+                "  [profile " +
+                Installed.Profile.ProfileVersion + "]";
+            Skeleton.SkeletonSignatureSha256 =
+                Installed.Profile.SkeletonSignatureSha256;
+            Skeleton.RestFbx =
+                profile::InstalledProfileResourcePath(
+                    Installed, Installed.Profile.RestFbx);
+            Skeleton.RestFbxSha256 =
+                Installed.Profile.RestFbx.Sha256;
+            Skeleton.IkRigJson =
+                profile::InstalledProfileResourcePath(
+                    Installed, Installed.Profile.IkRigJson);
+            Skeleton.IkRigJsonSha256 =
+                Installed.Profile.IkRigJson.Sha256;
+            Skeleton.AlignmentRetargeterJson =
+                profile::InstalledProfileResourcePath(
+                    Installed,
+                    Installed.Profile.AlignmentRetargeterJson);
+            Skeleton.AlignmentRetargeterJsonSha256 =
+                Installed.Profile.AlignmentRetargeterJson.Sha256;
+            Skeleton.SourceEnabled =
+                Installed.Profile.SourceEnabled;
+            Skeleton.TargetEnabled =
+                Installed.Profile.TargetEnabled;
+            auto Existing = std::find_if(
+                Catalog.Skeletons.begin(), Catalog.Skeletons.end(),
+                [&](const RetargetSkeletonAsset& Candidate)
+                {
+                    return Candidate.Id == Skeleton.Id;
+                });
+            if (Existing == Catalog.Skeletons.end())
+                Catalog.Skeletons.push_back(std::move(Skeleton));
+            else
+                *Existing = std::move(Skeleton);
+        }
+
+        SourceSkeletonIndex = -1;
+        TargetSkeletonIndex = -1;
+        AnimationIndex = -1;
+        for (std::size_t Index = 0;
+             Index < Catalog.Skeletons.size(); ++Index)
+        {
+            const RetargetSkeletonAsset& Skeleton =
+                Catalog.Skeletons[Index];
+            if (Skeleton.SourceEnabled &&
+                ((SourceSkeletonIndex < 0 && PreviousSourceId.empty()) ||
+                 Skeleton.Id == PreviousSourceId))
+            {
+                SourceSkeletonIndex = static_cast<int>(Index);
+                if (Skeleton.Id == PreviousSourceId) break;
+            }
+        }
+        for (std::size_t Index = 0;
+             Index < Catalog.Skeletons.size(); ++Index)
+        {
+            const RetargetSkeletonAsset& Skeleton =
+                Catalog.Skeletons[Index];
+            if (Skeleton.TargetEnabled &&
+                ((TargetSkeletonIndex < 0 && PreviousTargetId.empty()) ||
+                 Skeleton.Id == PreviousTargetId))
+            {
+                TargetSkeletonIndex = static_cast<int>(Index);
+                if (Skeleton.Id == PreviousTargetId) break;
+            }
+        }
+        if (SourceSkeletonIndex < 0 || TargetSkeletonIndex < 0)
+        {
+            for (std::size_t Index = 0;
+                 Index < Catalog.Skeletons.size(); ++Index)
+            {
+                const RetargetSkeletonAsset& Skeleton =
+                    Catalog.Skeletons[Index];
+                if (SourceSkeletonIndex < 0 &&
+                    Skeleton.SourceEnabled)
+                    SourceSkeletonIndex = static_cast<int>(Index);
+                if (TargetSkeletonIndex < 0 &&
+                    Skeleton.TargetEnabled)
+                    TargetSkeletonIndex = static_cast<int>(Index);
+            }
+        }
+
+        CatalogLoaded = !Catalog.Skeletons.empty();
+        if (CatalogLoaded)
+        {
+            UseUEIKJsonRoute = true;
+            RefreshCompatibleAnimations(false);
+            for (const std::size_t Index :
+                 CompatibleAnimationIndices)
+            {
+                if (Catalog.Animations[Index].Id ==
+                    PreviousAnimationId)
+                {
+                    AnimationIndex = static_cast<int>(Index);
+                    break;
+                }
+            }
+            if (AnimationIndex < 0 && SelectFirst &&
+                !CompatibleAnimationIndices.empty())
+            {
+                AnimationIndex = static_cast<int>(
+                    CompatibleAnimationIndices.front());
+            }
+            Message =
+                "角色包与动画目录已刷新；动画只会显示当前源骨骼的绑定项。";
+        }
+        else
+        {
+            CompatibleAnimationIndices.clear();
+            Message =
+                "尚无可用角色；请安装 .skrtgprofile 或配置资产目录。";
+        }
+    }
+
+    void InstallSelectedProfile()
+    {
+        const std::filesystem::path Package =
+            BufferPath(Buffers.CharacterProfilePackage)
+                .lexically_normal();
+        const profile::ProfileInstallResult Result =
+            profile::InstallCharacterProfilePackage(
+                Package, ProfileStoreRoot);
+        if (!Result.Success)
+        {
+            ProfileMessage = Result.Errors.empty()
+                ? "角色包安装失败。"
+                : "角色包安装失败：" + Result.Errors.front();
+            return;
+        }
+        const std::string InstalledId =
+            Result.Installed.Profile.ProfileId;
+        const std::string InstalledVersion =
+            Result.Installed.Profile.ProfileVersion;
+        ReloadCatalogAndProfiles(true);
+        ProfileMessage = Result.AlreadyInstalled
+            ? "角色包已经安装且哈希一致：" +
+                InstalledId + " " + InstalledVersion
+            : "角色包安装完成：" +
+                InstalledId + " " + InstalledVersion;
     }
 
     void RefreshCompatibleAnimations(const bool SelectFirst)
@@ -601,6 +842,32 @@ struct RetargetBridgeUi::Impl
                 Animation != nullptr ? Animation->Id : std::string(),
                 Target != nullptr ? Target->Id : std::string(),
                 Request, CatalogSelectionErrors);
+            if (Source != nullptr)
+            {
+                if (const profile::InstalledCharacterProfile*
+                        Installed = ActiveProfileFor(Source->Id))
+                {
+                    Request.AssetBinding.SourceProfilePackage =
+                        Installed->PackagePath;
+                    Request.AssetBinding.SourceProfilePackageSha256 =
+                        Installed->PackageSha256;
+                    Request.AssetBinding.SourceProfileVersion =
+                        Installed->Profile.ProfileVersion;
+                }
+            }
+            if (Target != nullptr)
+            {
+                if (const profile::InstalledCharacterProfile*
+                        Installed = ActiveProfileFor(Target->Id))
+                {
+                    Request.AssetBinding.TargetProfilePackage =
+                        Installed->PackagePath;
+                    Request.AssetBinding.TargetProfilePackageSha256 =
+                        Installed->PackageSha256;
+                    Request.AssetBinding.TargetProfileVersion =
+                        Installed->Profile.ProfileVersion;
+                }
+            }
         }
         else
         {
@@ -886,7 +1153,12 @@ struct RetargetBridgeUi::Impl
     RetargetBridgeTools Tools;
     std::filesystem::path BatchExecutable;
     std::filesystem::path CatalogFile;
+    std::filesystem::path ProfileStoreRoot;
     RetargetAssetCatalog Catalog;
+    std::vector<profile::InstalledCharacterProfile>
+        InstalledProfiles;
+    std::vector<profile::InstalledCharacterProfile>
+        ActiveProfiles;
     bool CatalogLoaded = false;
     int SourceSkeletonIndex = -1;
     int TargetSkeletonIndex = -1;
@@ -894,6 +1166,8 @@ struct RetargetBridgeUi::Impl
     std::vector<std::size_t> CompatibleAnimationIndices;
     std::vector<std::string> CatalogErrors;
     std::vector<std::string> CatalogWarnings;
+    std::vector<std::string> ProfileErrors;
+    std::vector<std::string> ProfileWarnings;
     std::vector<std::string> CatalogSelectionErrors;
     PathBuffers Buffers;
     BrowserState Browser;
@@ -930,6 +1204,8 @@ struct RetargetBridgeUi::Impl
     std::string ExportMessage;
     std::string BatchMessage;
     std::string Message;
+    std::string ProfileMessage;
+    int PendingProfileDeleteIndex = -1;
     int CompletedRuns = 0;
 };
 
@@ -977,6 +1253,138 @@ void RetargetBridgeUi::Draw()
         {
             ImGui::TextWrapped(
                 "选择重定向路线和输入。UE IK JSON 路线只读取从 UE 导出的 JSON，不读取 uasset，也不推断骨名；两条路线均在独立进程中运行并经过 SKRV v1 严格验证。");
+            ImGui::SeparatorText(
+                "角色包（.skrtgprofile v1）");
+            ImGui::TextWrapped(
+                "安装目录：%s",
+                PathToUtf8(State->ProfileStoreRoot).c_str());
+            DrawPathRow(
+                "待安装角色包", "##CharacterProfilePackage",
+                State->Buffers.CharacterProfilePackage,
+                State->Browser,
+                BrowseTarget::CharacterProfilePackage,
+                BrowseSelection::CharacterProfile);
+            const bool ProfilePackageSelected =
+                IsCharacterProfilePackage(
+                    BufferPath(
+                        State->Buffers.CharacterProfilePackage));
+            ImGui::BeginDisabled(!ProfilePackageSelected);
+            if (ImGui::Button("校验并安装角色包"))
+                State->InstallSelectedProfile();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("刷新角色包与动画目录"))
+            {
+                State->ReloadCatalogAndProfiles(false);
+                State->ProfileMessage =
+                    "角色包与动画目录已刷新。";
+            }
+            if (!State->ProfileMessage.empty())
+                ImGui::TextWrapped(
+                    "%s", State->ProfileMessage.c_str());
+            bool OpenDeleteProfilePopup = false;
+            if (ImGui::TreeNode(
+                    "已安装角色包（同一角色仅启用最高版本）"))
+            {
+                if (State->InstalledProfiles.empty())
+                    ImGui::TextDisabled("尚未安装角色包。");
+                for (std::size_t Index = 0;
+                     Index < State->InstalledProfiles.size();
+                     ++Index)
+                {
+                    const profile::InstalledCharacterProfile&
+                        Installed =
+                            State->InstalledProfiles[Index];
+                    const profile::InstalledCharacterProfile* Active =
+                        State->ActiveProfileFor(
+                            Installed.Profile.ProfileId);
+                    const bool IsActive =
+                        Active != nullptr &&
+                        Active->PackageSha256 ==
+                            Installed.PackageSha256;
+                    ImGui::PushID(static_cast<int>(Index));
+                    ImGui::Text(
+                        "%s  %s%s",
+                        Installed.Profile.DisplayName.c_str(),
+                        Installed.Profile.ProfileVersion.c_str(),
+                        IsActive ? "  [启用]" : "");
+                    ImGui::TextDisabled(
+                        "%s",
+                        Installed.Profile.ProfileId.c_str());
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("删除"))
+                    {
+                        State->PendingProfileDeleteIndex =
+                            static_cast<int>(Index);
+                        OpenDeleteProfilePopup = true;
+                    }
+                    ImGui::PopID();
+                }
+                for (const std::string& Warning :
+                     State->ProfileWarnings)
+                {
+                    ImGui::TextColored(
+                        {0.95F, 0.76F, 0.35F, 1.0F},
+                        "- %s", Warning.c_str());
+                }
+                for (const std::string& Error :
+                     State->ProfileErrors)
+                {
+                    ImGui::TextColored(
+                        {1.0F, 0.45F, 0.45F, 1.0F},
+                        "- %s", Error.c_str());
+                }
+                ImGui::TreePop();
+            }
+            if (OpenDeleteProfilePopup)
+            {
+                ImGui::OpenPopup(
+                    "确认删除角色包##DeleteProfile");
+            }
+            if (ImGui::BeginPopupModal(
+                    "确认删除角色包##DeleteProfile", nullptr,
+                    ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                const int Index =
+                    State->PendingProfileDeleteIndex;
+                if (Index >= 0 &&
+                    static_cast<std::size_t>(Index) <
+                        State->InstalledProfiles.size())
+                {
+                    const profile::InstalledCharacterProfile&
+                        Installed =
+                            State->InstalledProfiles[
+                                static_cast<std::size_t>(Index)];
+                    ImGui::TextWrapped(
+                        "删除 %s %s？动画文件不会被删除。",
+                        Installed.Profile.DisplayName.c_str(),
+                        Installed.Profile.ProfileVersion.c_str());
+                    if (ImGui::Button("确认删除"))
+                    {
+                        const profile::ProfileDeleteResult Deleted =
+                            profile::DeleteInstalledCharacterProfile(
+                                Installed,
+                                State->ProfileStoreRoot);
+                        State->ProfileMessage = Deleted.Success
+                            ? "角色包已删除。"
+                            : (Deleted.Errors.empty()
+                                ? "角色包删除失败。"
+                                : "角色包删除失败：" +
+                                    Deleted.Errors.front());
+                        State->PendingProfileDeleteIndex = -1;
+                        if (Deleted.Success)
+                            State->ReloadCatalogAndProfiles(false);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                }
+                if (ImGui::Button("取消"))
+                {
+                    State->PendingProfileDeleteIndex = -1;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
             ImGui::SeparatorText("重定向路线（必须由用户显式选择）");
             if (ImGui::RadioButton(
                     "外部 Foundation 兼容路线##ExternalFoundationRoute",
@@ -1026,6 +1434,7 @@ void RetargetBridgeUi::Draw()
                             const bool Selected =
                                 State->SourceSkeletonIndex ==
                                 static_cast<int>(Index);
+                            ImGui::PushID(Skeleton.Id.c_str());
                             if (ImGui::Selectable(
                                     Skeleton.Label.c_str(), Selected))
                             {
@@ -1037,6 +1446,7 @@ void RetargetBridgeUi::Draw()
                             }
                             if (Selected)
                                 ImGui::SetItemDefaultFocus();
+                            ImGui::PopID();
                         }
                         ImGui::EndCombo();
                     }
@@ -1065,6 +1475,7 @@ void RetargetBridgeUi::Draw()
                             const bool Selected =
                                 State->AnimationIndex ==
                                 static_cast<int>(Index);
+                            ImGui::PushID(Candidate.Id.c_str());
                             if (ImGui::Selectable(
                                     Candidate.Label.c_str(), Selected))
                             {
@@ -1075,6 +1486,7 @@ void RetargetBridgeUi::Draw()
                             }
                             if (Selected)
                                 ImGui::SetItemDefaultFocus();
+                            ImGui::PopID();
                         }
                         ImGui::EndCombo();
                     }
@@ -1101,6 +1513,7 @@ void RetargetBridgeUi::Draw()
                             const bool Selected =
                                 State->TargetSkeletonIndex ==
                                 static_cast<int>(Index);
+                            ImGui::PushID(Skeleton.Id.c_str());
                             if (ImGui::Selectable(
                                     Skeleton.Label.c_str(), Selected))
                             {
@@ -1109,6 +1522,7 @@ void RetargetBridgeUi::Draw()
                             }
                             if (Selected)
                                 ImGui::SetItemDefaultFocus();
+                            ImGui::PopID();
                         }
                         ImGui::EndCombo();
                     }
@@ -1125,6 +1539,17 @@ void RetargetBridgeUi::Draw()
                             PathToUtf8(State->CatalogFile).c_str());
                         if (Source != nullptr)
                         {
+                            if (const profile::InstalledCharacterProfile*
+                                    Installed =
+                                        State->ActiveProfileFor(
+                                            Source->Id))
+                            {
+                                ImGui::TextWrapped(
+                                    "源角色包：%s",
+                                    PathToUtf8(
+                                        Installed->PackagePath)
+                                        .c_str());
+                            }
                             ImGui::TextWrapped(
                                 "源 Rest：%s",
                                 PathToUtf8(Source->RestFbx).c_str());
@@ -1148,6 +1573,17 @@ void RetargetBridgeUi::Draw()
                         }
                         if (Target != nullptr)
                         {
+                            if (const profile::InstalledCharacterProfile*
+                                    Installed =
+                                        State->ActiveProfileFor(
+                                            Target->Id))
+                            {
+                                ImGui::TextWrapped(
+                                    "目标角色包：%s",
+                                    PathToUtf8(
+                                        Installed->PackagePath)
+                                        .c_str());
+                            }
                             ImGui::TextWrapped(
                                 "目标 Rest：%s",
                                 PathToUtf8(Target->RestFbx).c_str());
@@ -1168,6 +1604,13 @@ void RetargetBridgeUi::Draw()
                         ImGui::TextColored(
                             {0.95F, 0.76F, 0.35F, 1.0F},
                             "- %s", Warning.c_str());
+                    }
+                    for (const std::string& Error :
+                         State->CatalogErrors)
+                    {
+                        ImGui::TextColored(
+                            {0.95F, 0.76F, 0.35F, 1.0F},
+                            "动画目录：%s", Error.c_str());
                     }
                 }
                 else
