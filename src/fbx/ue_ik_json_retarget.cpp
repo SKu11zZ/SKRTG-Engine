@@ -122,10 +122,18 @@ struct AnimationBindModel
     int SkinClusterBoneCount = 0;
     int BindPoseBoneCount = 0;
     int DerivedLeafBoneCount = 0;
+    int GoldenReferenceBoneCount = 0;
+    bool UsedGoldenReferenceFallback = false;
     double MaximumDuplicateTranslationCm = 0.0;
     double MaximumDuplicateRotationDegrees = 0.0;
     double MaximumDuplicateScale = 0.0;
     double MaximumUEReferencePositionResidualCm = 0.0;
+    double MaximumGoldenLocalTranslationCm = 0.0;
+    double MaximumGoldenLocalRotationDegrees = 0.0;
+    double MaximumGoldenLocalScale = 0.0;
+    double MaximumGoldenModelTranslationCm = 0.0;
+    double MaximumGoldenModelRotationDegrees = 0.0;
+    double MaximumGoldenModelScale = 0.0;
 };
 
 struct OwnedFrame
@@ -1075,6 +1083,157 @@ bool BuildAnimationBindModel(
             "derived_leaf_from_parent_bind_and_fbx_reference_local";
         ++Out.DerivedLeafBoneCount;
     }
+    return true;
+}
+
+bool SceneRequiresDirectAnimationBindAudit(
+    FbxScene* Scene,
+    const BoundSkeleton& Skeleton)
+{
+    if (Scene == nullptr || Skeleton.Nodes.empty())
+        return false;
+
+    std::vector<FbxNode*> Nodes;
+    CollectAllNodes(Scene->GetRootNode(), Nodes);
+    for (FbxNode* Node : Nodes)
+    {
+        // A Mesh of any kind disqualifies the animation-only fallback.
+        // Missing or damaged Skin data must reach the original bind audit
+        // and fail closed instead of being treated as no bind payload.
+        if (Node != nullptr && Node->GetMesh() != nullptr)
+            return true;
+    }
+
+    for (int PoseIndex = 0;
+         PoseIndex < Scene->GetPoseCount(); ++PoseIndex)
+    {
+        FbxPose* Pose = Scene->GetPose(PoseIndex);
+        // The BindPose marker itself is evidence. An empty or damaged pose
+        // must not be allowed to bypass the direct bind audit.
+        if (Pose != nullptr && Pose->IsBindPose())
+            return true;
+    }
+    return false;
+}
+
+template <typename BoneType>
+bool BuildGoldenReferenceBindEvidence(
+    const std::vector<BoneType>& RigBones,
+    const std::vector<UEFbxImportExactBone>& GoldenBones,
+    const UEIKJsonRetargetOptions& Options,
+    AnimationBindModel& Out,
+    std::string& OutError)
+{
+    if (RigBones.empty() ||
+        RigBones.size() != GoldenBones.size())
+    {
+        OutError =
+            "UE golden reference inventory does not match the source IK Rig";
+        return false;
+    }
+
+    const double TranslationTolerance =
+        std::min(Options.RestTranslationToleranceCm, 1.0e-3);
+    const double RotationTolerance =
+        std::min(Options.RestRotationToleranceDegrees, 1.0e-3);
+    const double ScaleTolerance =
+        std::min(Options.RestScaleTolerance, 1.0e-5);
+
+    AnimationBindModel Candidate;
+    Candidate.Model.resize(RigBones.size());
+    Candidate.Sources.assign(
+        RigBones.size(),
+        "hash_bound_ue_golden_reference_no_fbx_bind_payload");
+    Candidate.GoldenReferenceBoneCount =
+        static_cast<int>(RigBones.size());
+    Candidate.UsedGoldenReferenceFallback = true;
+
+    for (std::size_t Index = 0;
+         Index < RigBones.size(); ++Index)
+    {
+        const BoneType& RigBone = RigBones[Index];
+        const UEFbxImportExactBone& GoldenBone =
+            GoldenBones[Index];
+        if (GoldenBone.Index != static_cast<int>(Index) ||
+            GoldenBone.ParentIndex != RigBone.ParentIndex ||
+            GoldenBone.Name != RigBone.Name)
+        {
+            OutError =
+                "UE golden reference hierarchy does not match the source IK Rig at bone " +
+                RigBone.Name;
+            return false;
+        }
+
+        const double LocalTranslation = Length(Subtract(
+            GoldenBone.ReferenceLocal.TranslationCm,
+            RigBone.ReferenceLocal.TranslationCm));
+        const double LocalRotation = QuaternionErrorDegrees(
+            GoldenBone.ReferenceLocal.Rotation,
+            RigBone.ReferenceLocal.Rotation);
+        const double LocalScale = ScaleError(
+            GoldenBone.ReferenceLocal.Scale,
+            RigBone.ReferenceLocal.Scale);
+        const double ModelTranslation = Length(Subtract(
+            GoldenBone.ReferenceModel.TranslationCm,
+            RigBone.ReferenceModel.TranslationCm));
+        const double ModelRotation = QuaternionErrorDegrees(
+            GoldenBone.ReferenceModel.Rotation,
+            RigBone.ReferenceModel.Rotation);
+        const double ModelScale = ScaleError(
+            GoldenBone.ReferenceModel.Scale,
+            RigBone.ReferenceModel.Scale);
+
+        Candidate.MaximumGoldenLocalTranslationCm = std::max(
+            Candidate.MaximumGoldenLocalTranslationCm,
+            LocalTranslation);
+        Candidate.MaximumGoldenLocalRotationDegrees = std::max(
+            Candidate.MaximumGoldenLocalRotationDegrees,
+            LocalRotation);
+        Candidate.MaximumGoldenLocalScale = std::max(
+            Candidate.MaximumGoldenLocalScale,
+            LocalScale);
+        Candidate.MaximumGoldenModelTranslationCm = std::max(
+            Candidate.MaximumGoldenModelTranslationCm,
+            ModelTranslation);
+        Candidate.MaximumGoldenModelRotationDegrees = std::max(
+            Candidate.MaximumGoldenModelRotationDegrees,
+            ModelRotation);
+        Candidate.MaximumGoldenModelScale = std::max(
+            Candidate.MaximumGoldenModelScale,
+            ModelScale);
+
+        if (!std::isfinite(LocalTranslation) ||
+            !std::isfinite(LocalRotation) ||
+            !std::isfinite(LocalScale) ||
+            !std::isfinite(ModelTranslation) ||
+            !std::isfinite(ModelRotation) ||
+            !std::isfinite(ModelScale) ||
+            LocalTranslation > TranslationTolerance ||
+            LocalRotation > RotationTolerance ||
+            LocalScale > ScaleTolerance ||
+            ModelTranslation > TranslationTolerance ||
+            ModelRotation > RotationTolerance ||
+            ModelScale > ScaleTolerance)
+        {
+            std::ostringstream Message;
+            Message
+                << "animation-only FBX lacks bind payload and its "
+                   "hash-bound UE golden reference does not match "
+                   "the source IK Rig at "
+                << RigBone.Name
+                << " (local_t_cm=" << LocalTranslation
+                << ", local_r_deg=" << LocalRotation
+                << ", local_s=" << LocalScale
+                << ", model_t_cm=" << ModelTranslation
+                << ", model_r_deg=" << ModelRotation
+                << ", model_s=" << ModelScale << ")";
+            OutError = Message.str();
+            return false;
+        }
+        Candidate.Model[Index] = RigBone.ReferenceModel;
+    }
+
+    Out = std::move(Candidate);
     return true;
 }
 
@@ -2356,21 +2515,38 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
                 ImportedRestModel,
                 SourceRestEvidenceModelRotation,
                 SourceRestEvidenceBasisMaximumResidualCm,
-                Error) ||
-            !BuildAnimationBindModel(
-                SourceAnimationScene.Scene,
-                Route.SourceRig.Bones,
-                SourceAnimation,
-                Options.RestScaleTolerance,
-                ImportedBindEvidence,
-                Error) ||
-            !ValidateAnimationBindAgainstUEReference(
-                Route.SourceRig.Bones,
-                ImportedBindEvidence,
-                Route.SourceRootIndex,
-                SourceRestEvidenceModelRotation,
-                ImportedBindEvidence,
                 Error))
+        {
+            return Fail(Error);
+        }
+        if (SceneRequiresDirectAnimationBindAudit(
+                SourceAnimationScene.Scene,
+                SourceAnimation))
+        {
+            if (!BuildAnimationBindModel(
+                    SourceAnimationScene.Scene,
+                    Route.SourceRig.Bones,
+                    SourceAnimation,
+                    Options.RestScaleTolerance,
+                    ImportedBindEvidence,
+                    Error) ||
+                !ValidateAnimationBindAgainstUEReference(
+                    Route.SourceRig.Bones,
+                    ImportedBindEvidence,
+                    Route.SourceRootIndex,
+                    SourceRestEvidenceModelRotation,
+                    ImportedBindEvidence,
+                    Error))
+            {
+                return Fail(Error);
+            }
+        }
+        else if (!BuildGoldenReferenceBindEvidence(
+                     Route.SourceRig.Bones,
+                     ExactSourceClip.Bones,
+                     Options,
+                     ImportedBindEvidence,
+                     Error))
         {
             return Fail(Error);
         }
@@ -2380,11 +2556,14 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
         SourceFbxToUEModelRotation =
             core::math::IdentityQuat();
         SourceFbxToUEBasisMaximumResidualCm = 0.0;
+        SourceAnimationBind = ImportedBindEvidence;
         SourceAnimationBind.Model.resize(
             Route.SourceRig.Bones.size());
         SourceAnimationBind.Sources.assign(
             Route.SourceRig.Bones.size(),
-            "source_ik_rig_reference_model_after_imported_bind_identity_audit");
+            ImportedBindEvidence.UsedGoldenReferenceFallback
+                ? "source_ik_rig_reference_model_after_hash_bound_golden_reference_audit"
+                : "source_ik_rig_reference_model_after_imported_bind_identity_audit");
         for (std::size_t BoneIndex = 0;
              BoneIndex <
                 SourceAnimationBind.Model.size();
@@ -2394,27 +2573,6 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
                 Route.SourceRig.Bones[BoneIndex]
                     .ReferenceModel;
         }
-        SourceAnimationBind.SkinClusterBoneCount =
-            ImportedBindEvidence.SkinClusterBoneCount;
-        SourceAnimationBind.BindPoseBoneCount =
-            ImportedBindEvidence.BindPoseBoneCount;
-        SourceAnimationBind.DerivedLeafBoneCount =
-            ImportedBindEvidence.DerivedLeafBoneCount;
-        SourceAnimationBind
-            .MaximumDuplicateTranslationCm =
-            ImportedBindEvidence
-                .MaximumDuplicateTranslationCm;
-        SourceAnimationBind
-            .MaximumDuplicateRotationDegrees =
-            ImportedBindEvidence
-                .MaximumDuplicateRotationDegrees;
-        SourceAnimationBind.MaximumDuplicateScale =
-            ImportedBindEvidence
-                .MaximumDuplicateScale;
-        SourceAnimationBind
-            .MaximumUEReferencePositionResidualCm =
-            ImportedBindEvidence
-                .MaximumUEReferencePositionResidualCm;
     }
     else
     {
@@ -2841,7 +2999,39 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
                    .ModelTranslationCm.Value},
               {"maximumModelRotationDegrees",
                ExactSourceClip.GoldenValidation
-                   .ModelRotationDegrees.Value}}}};
+                   .ModelRotationDegrees.Value}}},
+            {"bindReferenceEvidence",
+             {{"mode",
+               SourceAnimationBind.UsedGoldenReferenceFallback
+                   ? "hash_bound_ue_golden_reference_for_animation_only_fbx"
+                   : "fbx_skin_cluster_or_bind_pose"},
+              {"skinClusterBoneCount",
+               SourceAnimationBind.SkinClusterBoneCount},
+              {"bindPoseBoneCount",
+               SourceAnimationBind.BindPoseBoneCount},
+              {"derivedLeafBoneCount",
+               SourceAnimationBind.DerivedLeafBoneCount},
+              {"goldenReferenceBoneCount",
+               SourceAnimationBind.GoldenReferenceBoneCount},
+              {"maximumUEReferencePositionResidualCm",
+               SourceAnimationBind
+                   .MaximumUEReferencePositionResidualCm},
+              {"maximumGoldenLocalTranslationCm",
+               SourceAnimationBind
+                   .MaximumGoldenLocalTranslationCm},
+              {"maximumGoldenLocalRotationDegrees",
+               SourceAnimationBind
+                   .MaximumGoldenLocalRotationDegrees},
+              {"maximumGoldenLocalScale",
+               SourceAnimationBind.MaximumGoldenLocalScale},
+              {"maximumGoldenModelTranslationCm",
+               SourceAnimationBind
+                   .MaximumGoldenModelTranslationCm},
+              {"maximumGoldenModelRotationDegrees",
+               SourceAnimationBind
+                   .MaximumGoldenModelRotationDegrees},
+              {"maximumGoldenModelScale",
+               SourceAnimationBind.MaximumGoldenModelScale}}}};
     }
     else
     {
@@ -2959,6 +3149,11 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
             Result.Warnings.end(),
             ExactSourceClip.Warnings.begin(),
             ExactSourceClip.Warnings.end());
+        if (SourceAnimationBind.UsedGoldenReferenceFallback)
+        {
+            Result.Warnings.push_back(
+                "The source FBX is animation-only and contains no skin-cluster or bind-pose payload. Its hash-bound UE Golden reference skeleton matched the source IK Rig within strict rest tolerances before the result was committed.");
+        }
     }
     Result.Warnings.push_back(
         "Source/target rest-pose differences, including T-pose to A-pose calibration, are sourced only from exported UE Retarget Poses; no automatic bone-name inference or uasset parsing is used.");

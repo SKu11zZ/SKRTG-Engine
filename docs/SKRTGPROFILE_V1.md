@@ -119,8 +119,11 @@ resources. Animation files stay external.
 
 The animation selector shows only enabled records whose
 `sourceSkeletonId` and `sourceSkeletonSignatureSha256` exactly equal the
-selected source profile identity and exported reference-skeleton fingerprint.
-Choosing a different source clears the old animation selection. This prevents
+selected source profile identity and IK Rig reference-skeleton fingerprint.
+The catalog field is an explicit profile binding; it does not claim that an
+animation asset's own UE Skeleton reference pose is byte-identical to the
+profile rest pose. Choosing a different source clears the old animation
+selection. This prevents
 an animation authored for an older, structurally different version of the
 same profile ID from reaching the Worker.
 
@@ -159,6 +162,15 @@ resource paths before running the Worker. A changed package, changed extracted
 file, mismatched role, wrong version, wrong animation owner, wrong skeleton
 fingerprint, or changed catalog fails preflight without starting a child
 process.
+
+Animation-only FBX files are supported by the exact UE path without inventing
+a bind pose. If the file contains no Mesh/SkinCluster and no FBX BindPose, the
+Worker requires its hash-bound Golden JSON reference hierarchy and every local
+and model rest transform to match the source IK Rig within strict rest
+tolerances. The FBX is still replayed and checked against every Golden key.
+If any FBX bind evidence exists, the original SkinCluster/BindPose audit stays
+mandatory; partial or damaged bind evidence cannot be bypassed by the Golden
+fallback.
 
 ## Boundaries
 

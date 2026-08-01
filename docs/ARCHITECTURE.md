@@ -47,6 +47,12 @@ Autodesk FBX SDK, then compares local and model transforms against every
 exported Unreal animation key. A mismatch fails the job before any result is
 committed.
 
+For an animation-only FBX with no Mesh and no FBX BindPose, the Worker uses
+the hash-bound UE Golden reference skeleton only after its hierarchy and all
+local/model rest transforms match the selected source IK Rig within strict
+rest tolerances. An FBX containing any Mesh or BindPose remains on the original
+direct bind-audit path; incomplete bind data fails closed.
+
 Rest-pose reconciliation, root/pelvis ownership, chain FK, analytic limb IK,
 finger transforms, and optional post operations are represented as explicit
 stages. The route JSON supplies the bone inventory, hierarchy, chains, goals,

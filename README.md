@@ -110,6 +110,11 @@ only into the local build output; it is ignored by Git.
 - UE configuration is JSON-export based, not direct engine-asset access.
 - The exact animation path is currently tied to the UE 5.8 import contract and
   checks every exported key against Golden data.
+- Animation-only FBX files without a Mesh, SkinCluster, or FBX BindPose are
+  accepted only when the hash-bound UE Golden reference skeleton matches the
+  selected source IK Rig within the same strict rest tolerances. If any FBX
+  bind evidence exists, the Worker keeps the original bind-evidence path and
+  does not fall back to Golden reference data.
 - A profile contains character configuration, not animation clips. A usable
   source still needs a separately cataloged, hash-bound animation whose
   `sourceSkeletonId` and `sourceSkeletonSignatureSha256` equal the selected
