@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CharacterDefinition schema="skrtg.character_definition.v1" schemaVersion="1">
+  <Character id="example_character" displayName="Example Character" rigAssetName="IK_Example" restPoseKind="t_pose"/>
+  <Coordinate handedness="left" forwardAxis="+X" rightAxis="+Y" upAxis="+Z" distanceUnit="centimeter" quaternionComponentOrder="x,y,z,w"/>
+  <Skeleton>
+    <Bone index="0" parentIndex="-1" name="root" localTranslationCm="0,0,0" localRotation="0,0,0,1" localScale="1,1,1"/>
+    <Bone index="1" parentIndex="0" name="pelvis" localTranslationCm="0,0,100" localRotation="0,0,0,1" localScale="1,1,1"/>
+  </Skeleton>
+  <Retarget rootBone="root" pelvisBone="pelvis">
+    <Chain name="Root" startBone="root" endBone="pelvis" ikGoal=""/>
+  </Retarget>
+</CharacterDefinition>

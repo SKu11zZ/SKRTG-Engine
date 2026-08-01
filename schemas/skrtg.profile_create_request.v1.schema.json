@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.profile_create_request.v1.schema.json",
+  "title": "SKRTG Character Profile create request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "profile", "inputs", "output"],
+  "properties": {
+    "schema": { "const": "skrtg.profile_create_request.v1" },
+    "schemaVersion": { "const": 1 },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "displayName", "restPoseKind"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$", "maxLength": 128 },
+        "version": { "type": "string", "maxLength": 64 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "canonicalProfileId": { "type": "string", "default": "ue5_manny" },
+        "restPoseKind": { "enum": ["t_pose", "a_pose", "custom", "unknown"] },
+        "sourceEnabled": { "type": "boolean", "default": true },
+        "targetEnabled": { "type": "boolean", "default": true }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restFbx", "definition", "alignmentRetargeterJson"],
+      "properties": {
+        "restFbx": { "type": "string", "minLength": 1 },
+        "definition": { "type": "string", "minLength": 1 },
+        "alignmentRetargeterJson": { "type": "string", "minLength": 1 },
+        "format": {
+          "enum": ["auto", "ue_ik_rig_json", "skrtg_character_json", "skrtg_character_xml", "rest_fbx"],
+          "default": "auto"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package"],
+      "properties": {
+        "package": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.cli.trace_event.v1.schema.json",
+  "title": "SKRTG CLI trace event v1",
+  "type": "object",
+  "required": ["schema", "schemaVersion", "event", "unixTimeMs"],
+  "properties": {
+    "schema": { "const": "skrtg.cli.trace_event.v1" },
+    "schemaVersion": { "const": 1 },
+    "event": { "enum": ["command_start", "command_finish"] },
+    "unixTimeMs": { "type": "integer", "minimum": 0 },
+    "arguments": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "command": { "type": "string" },
+    "ok": { "type": "boolean" },
+    "exitCode": { "type": "integer" },
+    "durationMs": { "type": "integer", "minimum": 0 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event": { "const": "command_start" } } },
+      "then": { "required": ["arguments"] }
+    },
+    {
+      "if": { "properties": { "event": { "const": "command_finish" } } },
+      "then": { "required": ["command", "ok", "exitCode", "durationMs"] }
+    }
+  ]
+}

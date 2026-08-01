@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.character_definition.v1.schema.json",
+  "title": "SKRTG normalized Character Definition v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "character", "coordinateContract", "skeleton", "retarget"],
+  "$defs": {
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "quat": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "type": "number" }
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translationCm", "rotation", "scale"],
+      "properties": {
+        "translationCm": { "$ref": "#/$defs/vec3" },
+        "rotation": { "$ref": "#/$defs/quat" },
+        "scale": { "$ref": "#/$defs/vec3" }
+      }
+    },
+    "bone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "parentIndex", "name", "local"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "parentIndex": { "type": "integer", "minimum": -1 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "local": { "$ref": "#/$defs/transform" },
+        "model": { "$ref": "#/$defs/transform" }
+      }
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "startBone", "endBone"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "startBone": { "type": "string", "minLength": 1 },
+        "endBone": { "type": "string", "minLength": 1 },
+        "ikGoal": { "type": "string", "default": "" }
+      }
+    }
+  },
+  "properties": {
+    "schema": { "const": "skrtg.character_definition.v1" },
+    "schemaVersion": { "const": 1 },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "rigAssetName", "restPoseKind"],
+      "properties": {
+        "id": { "type": "string" },
+        "displayName": { "type": "string" },
+        "rigAssetName": { "type": "string" },
+        "restPoseKind": { "enum": ["t_pose", "a_pose", "custom", "unknown"] }
+      }
+    },
+    "coordinateContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handedness", "forwardAxis", "rightAxis", "upAxis", "distanceUnit", "quaternionComponentOrder"],
+      "properties": {
+        "handedness": { "const": "left" },
+        "forwardAxis": { "const": "+X" },
+        "rightAxis": { "const": "+Y" },
+        "upAxis": { "const": "+Z" },
+        "distanceUnit": { "const": "centimeter" },
+        "quaternionComponentOrder": { "const": "x,y,z,w" }
+      }
+    },
+    "skeleton": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bones"],
+      "properties": {
+        "fingerprintSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "fingerprintKind": { "type": "string" },
+        "bones": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8192,
+          "items": { "$ref": "#/$defs/bone" }
+        }
+      }
+    },
+    "retarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rootBone", "pelvisBone", "chains"],
+      "properties": {
+        "rootBone": { "type": "string" },
+        "pelvisBone": { "type": "string" },
+        "chains": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/chain" }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["sourceFormat", "sourceSchema", "sourceFileName", "sourceSha256", "adapter", "adapterVersion"],
+      "properties": {
+        "sourceFormat": { "type": "string" },
+        "sourceSchema": { "type": "string" },
+        "sourceFileName": { "type": "string" },
+        "sourceSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "adapter": { "type": "string" },
+        "adapterVersion": { "type": "string" }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtimeDefinitionComplete", "missingRequirements"],
+      "properties": {
+        "runtimeDefinitionComplete": { "type": "boolean" },
+        "missingRequirements": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

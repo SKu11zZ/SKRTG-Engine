@@ -1,0 +1,54 @@
+{
+  "schema": "skrtg.character_definition.v1",
+  "schemaVersion": 1,
+  "character": {
+    "id": "example_character",
+    "displayName": "Example Character",
+    "rigAssetName": "IK_Example",
+    "restPoseKind": "t_pose"
+  },
+  "coordinateContract": {
+    "handedness": "left",
+    "forwardAxis": "+X",
+    "rightAxis": "+Y",
+    "upAxis": "+Z",
+    "distanceUnit": "centimeter",
+    "quaternionComponentOrder": "x,y,z,w"
+  },
+  "skeleton": {
+    "bones": [
+      {
+        "index": 0,
+        "parentIndex": -1,
+        "name": "root",
+        "local": {
+          "translationCm": [0, 0, 0],
+          "rotation": [0, 0, 0, 1],
+          "scale": [1, 1, 1]
+        }
+      },
+      {
+        "index": 1,
+        "parentIndex": 0,
+        "name": "pelvis",
+        "local": {
+          "translationCm": [0, 0, 100],
+          "rotation": [0, 0, 0, 1],
+          "scale": [1, 1, 1]
+        }
+      }
+    ]
+  },
+  "retarget": {
+    "rootBone": "root",
+    "pelvisBone": "pelvis",
+    "chains": [
+      {
+        "name": "Root",
+        "startBone": "root",
+        "endBone": "pelvis",
+        "ikGoal": ""
+      }
+    ]
+  }
+}

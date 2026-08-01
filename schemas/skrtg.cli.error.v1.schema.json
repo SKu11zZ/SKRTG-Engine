@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.cli.error.v1.schema.json",
+  "title": "SKRTG CLI error envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "ok", "command", "error", "meta"],
+  "properties": {
+    "schema": { "const": "skrtg.cli.error.v1" },
+    "schemaVersion": { "const": 1 },
+    "ok": { "const": false },
+    "command": { "type": "string", "minLength": 1 },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "stage", "retryable", "message", "details", "suggestedActions"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+        "stage": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" },
+        "message": { "type": "string", "minLength": 1 },
+        "details": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "suggestedActions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "context": { "type": "object" }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cliVersion"],
+      "properties": {
+        "cliVersion": { "type": "string" }
+      }
+    }
+  }
+}

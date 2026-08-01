@@ -36,6 +36,11 @@ struct CharacterProfileDescriptor
     std::string UnrealEngineVersion;
     std::string RetargetRootBone;
     std::string RetargetPelvisBone;
+    std::string SourceDefinitionFormat;
+    std::string SourceDefinitionSha256;
+    std::string DefinitionImporter;
+    std::string DefinitionImporterVersion;
+    std::string RestPoseKind;
     bool SourceEnabled = true;
     bool TargetEnabled = true;
     ProfileResource ProfileJson;
@@ -61,6 +66,15 @@ struct ProfilePackRequest
     std::filesystem::path RestFbx;
     std::filesystem::path IkRigJson;
     std::filesystem::path AlignmentRetargeterJson;
+    // Optional authoring provenance. Legacy callers may leave every field
+    // empty. New Character Definition importers set the complete group so a
+    // packaged profile remains traceable to its source without weakening the
+    // compiled UE IK JSON runtime contract.
+    std::string SourceDefinitionFormat;
+    std::string SourceDefinitionSha256;
+    std::string DefinitionImporter;
+    std::string DefinitionImporterVersion;
+    std::string RestPoseKind;
     bool SourceEnabled = true;
     bool TargetEnabled = true;
 };

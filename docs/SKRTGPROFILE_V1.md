@@ -36,6 +36,13 @@ The IK Retargeter's target IK Rig asset name must equal the packaged IK Rig
 asset name. The package stores the exported reference-skeleton fingerprint as
 its skeleton signature. No `.uasset` is read.
 
+Packages created through the unified Character Definition compiler also add
+an optional `profile.json.authoring` record with source format, source
+SHA-256, importer id/version, and `restPoseKind`. This metadata is part of the
+hashed `profile.json`; it does not add a seventh container record or weaken
+the six-record runtime contract. Legacy v1 packages without this additive
+metadata remain valid.
+
 ## Identity and versions
 
 `profileId` is portable lowercase ASCII. It may contain letters, digits,
@@ -184,13 +191,13 @@ fallback.
 
 ## Boundaries
 
-v1 intentionally does not:
+The v1 runtime package itself intentionally does not:
 
 - contain animation FBX or Golden animation JSON;
 - parse `.uasset`;
 - infer skeleton mappings or bone names;
-- generate an IK Rig or Retargeter;
-- convert arbitrary FBX coordinate systems;
+- infer or generate retarget semantics from bone names;
+- generate an alignment Retargeter;
 - claim UE FullBodyIK parity;
 - select or adopt an algorithm route;
 - change SKRV v1 or let the Viewer recompute retargeting;
@@ -203,3 +210,9 @@ and skeleton fingerprint. A profile itself does not require loose skeleton
 entries in the animation catalog. Adding a profile does not require adding
 pairwise mappings to every other character because the alignment remains
 canonical-to-character.
+
+The separate Character Profile authoring layer can compile an explicitly
+mapped SKRTG JSON/XML definition into the packaged UE IK JSON shape and can
+normalize a Rest FBX skeleton using the registered FBX adapter. A Rest FBX by
+itself remains a draft: it does not supply root, pelvis, chains, goals, or
+canonical alignment. See [Character Profile authoring v2](CHARACTER_PROFILE_AUTHORING_V2.md).

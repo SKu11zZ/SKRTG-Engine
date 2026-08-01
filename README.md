@@ -11,12 +11,18 @@
   <a href="#read-chinese"><img alt="中文" src="https://img.shields.io/badge/中文-阅读中文版-18181B?style=for-the-badge"></a>
   <a href="#read-english"><img alt="English" src="https://img.shields.io/badge/English-Read_in_English-18181B?style=for-the-badge"></a>
   <a href="#current-build"><img alt="Current build" src="https://img.shields.io/badge/Current_build-Four_Profile_Matrix-D6A900?style=for-the-badge"></a>
-  <a href="#license"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-18181B?style=for-the-badge"></a>
+  <a href="#license"><img alt="Apache License 2.0" src="https://img.shields.io/badge/License-Apache--2.0-18181B?style=for-the-badge"></a>
 </p>
 
 <p align="center">
   <code>Windows x64</code> · <code>C++20</code> · <code>UE 5.8 JSON</code> · <code>SKRV v1</code>
 </p>
+
+<p align="center">
+  <img src="docs/skrtg-viewer-demo.png" width="100%" alt="SKRTG Native Viewer showing Mixamo Fist Fight A retargeted to UE5 Manny at frame 70 of 140 across Original, FK, Foundation, and Final synchronized views">
+</p>
+
+<p align="center"><sub>实机画面 / Actual application capture — Mixamo Fist Fight A → UE5 Manny，帧 70 / 140；Original、FK、Foundation 与 Final 四视图同步。</sub></p>
 
 ---
 
@@ -48,6 +54,8 @@
 
 ### 现在可以做什么
 
+- 用统一的 `skrtg` CLI 完成能力发现、环境检查、Profile 导入/检查、Batch、Bridge、SKRV 验证和 Agent 调试；`--json` 提供稳定机器协议。
+- 把 UE IK Rig JSON、SKRTG Character Definition JSON/XML 规范化为同一个角色定义；也可以只读探测 Rest FBX，并明确列出尚缺的映射信息。
 - 用 `.skrtgprofile v1` 把一个角色的 Rest FBX、IK Rig JSON、对齐用 IK Retargeter JSON 和完整性清单放进同一个可验证角色包。
 - 在 Viewer 中安装、检查、切换和移除角色 Profile；同一角色可以安装多个版本，默认启用最高 SemVer 版本。
 - 在批处理界面选择源角色和目标角色。动画列表只显示属于当前源骨骼、且 skeleton signature 完全匹配的动画。
@@ -59,10 +67,9 @@
 ### 数据怎么进入 SKRTG
 
 ```text
-UE 5.8 Exporter
-  ├─ IK Rig JSON
-  ├─ IK Retargeter JSON
-  └─ Rest / Animation Golden JSON
+UE 5.8 Exporter JSON / Character Definition JSON or XML / Rest FBX probe
+  → skrtg profile probe / normalize / create
+  → .skrtgprofile
 
 .skrtgprofile + 外部动画 Catalog
   → Bridge v5 / Batch v3
@@ -113,6 +120,11 @@ cmake -S . -B build -A x64 `
 
 ### 继续阅读
 
+- [统一 CLI 与 Agent 协议](docs/CLI.md)
+- [Character Profile authoring v2](docs/CHARACTER_PROFILE_AUTHORING_V2.md)
+- [工程目录与依赖方向](docs/PROJECT_LAYOUT.md)
+- [参与开发](CONTRIBUTING.md)
+- [Agent 工作合同](AGENTS.md)
 - [架构与运行链](docs/ARCHITECTURE.md)
 - [`.skrtgprofile v1` 合同](docs/SKRTGPROFILE_V1.md)
 - [Profile Batch v3 合同](docs/PROFILE_BATCH_V3.md)
@@ -149,6 +161,8 @@ See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) for the validation record
 
 ### What works today
 
+- The unified `skrtg` CLI covers capability discovery, environment checks, Profile import/inspection, Batch, Bridge, SKRV verification, and agent diagnostics. `--json` provides a stable machine contract.
+- UE IK Rig JSON and SKRTG Character Definition JSON/XML normalize into one character model. A Rest FBX can also be probed read-only, with missing mapping semantics reported explicitly.
 - `.skrtgprofile v1` packages a character's rest FBX, IK Rig JSON, alignment IK Retargeter JSON, metadata, and integrity inventory into one verifiable unit.
 - The Viewer can inspect, install, switch, and remove profiles. Multiple versions can coexist, with the highest SemVer version active by default.
 - The batch UI selects source and target profiles, then shows only animations owned by the selected source skeleton with an exact matching skeleton signature.
@@ -160,10 +174,9 @@ See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) for the validation record
 ### How data moves through SKRTG
 
 ```text
-UE 5.8 Exporter
-  ├─ IK Rig JSON
-  ├─ IK Retargeter JSON
-  └─ Rest / Animation Golden JSON
+UE 5.8 Exporter JSON / Character Definition JSON or XML / Rest FBX probe
+  → skrtg profile probe / normalize / create
+  → .skrtgprofile
 
 .skrtgprofile + external animation catalog
   → Bridge v5 / Batch v3
@@ -214,6 +227,11 @@ This public repository contains source code, tests, and documentation only. Char
 
 ### Documentation
 
+- [Unified CLI and agent contract](docs/CLI.md)
+- [Character Profile authoring v2](docs/CHARACTER_PROFILE_AUTHORING_V2.md)
+- [Project layout and dependency direction](docs/PROJECT_LAYOUT.md)
+- [Contributing](CONTRIBUTING.md)
+- [Agent working contract](AGENTS.md)
 - [Architecture and runtime flow](docs/ARCHITECTURE.md)
 - [`.skrtgprofile v1` contract](docs/SKRTGPROFILE_V1.md)
 - [Profile Batch v3 contract](docs/PROFILE_BATCH_V3.md)
@@ -228,8 +246,8 @@ This public repository contains source code, tests, and documentation only. Char
 
 ## License / 许可证
 
-SKRTG Engine 的自有源码以 [MIT License](LICENSE) 发布。仓库内随附的第三方组件继续适用各自的许可证，详见 [Third-Party Notices](native_viewer/THIRD_PARTY_NOTICES.md)。
+SKRTG Engine 的自有源码以 [Apache License 2.0](LICENSE) 发布。仓库内随附的第三方组件继续适用各自的许可证，详见 [NOTICE](NOTICE) 与 [Third-Party Notices](native_viewer/THIRD_PARTY_NOTICES.md)。
 
-Original SKRTG Engine source code is released under the [MIT License](LICENSE). Bundled third-party components remain under their respective licenses; see [Third-Party Notices](native_viewer/THIRD_PARTY_NOTICES.md).
+Original SKRTG Engine source code is released under the [Apache License 2.0](LICENSE). Bundled third-party components remain under their respective licenses; see [NOTICE](NOTICE) and [Third-Party Notices](native_viewer/THIRD_PARTY_NOTICES.md).
 
 <p align="right"><a href="#top">Back to top / 返回顶部 ↑</a></p>

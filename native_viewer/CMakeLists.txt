@@ -96,6 +96,24 @@ endfunction()
 
 skrtg_configure_viewer_target(skrtg_skrv)
 skrtg_configure_viewer_target(skrtg_profile)
+
+# Character Definition import requires the root engine's FBX and math
+# targets. Keep the native Viewer subproject independently configurable while
+# exposing the complete unified CLI from normal top-level builds.
+if(TARGET skrtg_core AND TARGET FBXSDK::FBXSDK)
+    add_library(skrtg_character_definition STATIC
+        src/character_definition.cpp)
+    target_include_directories(skrtg_character_definition
+        PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_SOURCE_DIR}/include"
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+    target_link_libraries(skrtg_character_definition
+        PUBLIC skrtg_profile
+        PRIVATE skrtg_core FBXSDK::FBXSDK)
+    target_compile_features(skrtg_character_definition PUBLIC cxx_std_20)
+    skrtg_configure_viewer_target(skrtg_character_definition)
+endif()
 skrtg_configure_viewer_target(skrtg_imgui)
 
 add_library(skrtg_viewer_core STATIC
@@ -154,6 +172,32 @@ target_include_directories(skrtg_batch_retarget PRIVATE
 target_link_libraries(skrtg_batch_retarget PRIVATE skrtg_viewer_core)
 skrtg_configure_viewer_target(skrtg_batch_retarget)
 
+if(TARGET skrtg_character_definition)
+    add_executable(skrtg
+        "${CMAKE_SOURCE_DIR}/apps/skrtg/main.cpp"
+        "${CMAKE_SOURCE_DIR}/apps/skrtg/cli.cpp")
+    target_include_directories(skrtg PRIVATE
+        "${CMAKE_SOURCE_DIR}/apps/skrtg"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+    target_link_libraries(skrtg PRIVATE
+        skrtg_character_definition
+        skrtg_viewer_core
+        skrtg_profile
+        skrtg_skrv
+        FBXSDK::FBXSDK)
+    target_compile_definitions(skrtg PRIVATE
+        SKRTG_CLI_VERSION="${CMAKE_PROJECT_VERSION}")
+    skrtg_configure_viewer_target(skrtg)
+    if(WIN32)
+        add_custom_command(TARGET skrtg POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_FILE:FBXSDK::FBXSDK>"
+                "$<TARGET_FILE_DIR:skrtg>"
+            COMMENT "Copying the Autodesk FBX SDK runtime for skrtg")
+    endif()
+endif()
+
 add_executable(skrtg_viewer
     tools/skrtg_viewer_main.cpp
     src/mesh_renderer.cpp
@@ -209,6 +253,31 @@ if(SKRTG_NATIVE_VIEWER_BUILD_TESTS)
     skrtg_configure_viewer_target(skrtgprofile_tests)
     add_test(NAME skrtgprofile_tests COMMAND skrtgprofile_tests)
 
+    if(TARGET skrtg_character_definition)
+        add_executable(character_definition_tests
+            tests/character_definition_tests.cpp)
+        target_include_directories(character_definition_tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+        target_link_libraries(character_definition_tests PRIVATE
+            skrtg_character_definition)
+        skrtg_configure_viewer_target(character_definition_tests)
+        add_test(NAME character_definition_tests
+            COMMAND character_definition_tests)
+        add_test(NAME skrtg_cli_version
+            COMMAND skrtg --json version)
+        set_tests_properties(skrtg_cli_version PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "\\\"schema\\\":\\\"skrtg.cli.result.v1\\\"")
+        add_test(NAME skrtg_cli_profile_adapters
+            COMMAND skrtg profile adapters --json)
+        set_tests_properties(skrtg_cli_profile_adapters PROPERTIES
+            PASS_REGULAR_EXPRESSION "rest_fbx_probe.v1")
+        add_test(NAME skrtg_cli_profile_create_help
+            COMMAND skrtg profile create --help --json)
+        set_tests_properties(skrtg_cli_profile_create_help PROPERTIES
+            PASS_REGULAR_EXPRESSION "profile create help")
+    endif()
+
     add_executable(
         profile_bridge_tests tests/profile_bridge_tests.cpp)
     target_include_directories(profile_bridge_tests PRIVATE
@@ -229,6 +298,26 @@ install(TARGETS
     skrtg_batch_retarget
     skrtg_viewer
     RUNTIME DESTINATION .)
+if(TARGET skrtg)
+    install(TARGETS skrtg RUNTIME DESTINATION .)
+    if(WIN32)
+        install(FILES "$<TARGET_FILE:FBXSDK::FBXSDK>"
+            DESTINATION .)
+    endif()
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/README.md"
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/NOTICE"
+        "${CMAKE_SOURCE_DIR}/AGENTS.md"
+        "${CMAKE_SOURCE_DIR}/CONTRIBUTING.md"
+        DESTINATION .)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/schemas"
+        DESTINATION .)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples"
+        DESTINATION .)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/docs"
+        DESTINATION .)
+endif()
 install(FILES scripts/review_html_to_skrv_payload.js
     DESTINATION scripts)
 install(FILES THIRD_PARTY_NOTICES.md

@@ -36,6 +36,15 @@ int main(int argc, char** argv)
         << "canonical_profile_id="
         << Result.Profile.CanonicalProfileId << '\n'
         << "definition_kind=" << Result.Profile.DefinitionKind << '\n'
+        << "source_definition_format="
+        << Result.Profile.SourceDefinitionFormat << '\n'
+        << "source_definition_sha256="
+        << Result.Profile.SourceDefinitionSha256 << '\n'
+        << "definition_importer="
+        << Result.Profile.DefinitionImporter << '\n'
+        << "definition_importer_version="
+        << Result.Profile.DefinitionImporterVersion << '\n'
+        << "rest_pose_kind=" << Result.Profile.RestPoseKind << '\n'
         << "source_enabled="
         << (Result.Profile.SourceEnabled ? "true" : "false") << '\n'
         << "target_enabled="

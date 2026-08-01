@@ -697,6 +697,23 @@ bool ParseProfileDescriptor(
         Value.value("retargetRootBone", "");
     Out.RetargetPelvisBone =
         Value.value("retargetPelvisBone", "");
+    const Json Authoring =
+        Value.value("authoring", Json::object());
+    if (!Authoring.is_object())
+    {
+        OutError = "character profile authoring provenance is invalid";
+        return false;
+    }
+    Out.SourceDefinitionFormat =
+        Authoring.value("sourceFormat", "");
+    Out.SourceDefinitionSha256 = UpperAscii(
+        Authoring.value("sourceSha256", ""));
+    Out.DefinitionImporter =
+        Authoring.value("importer", "");
+    Out.DefinitionImporterVersion =
+        Authoring.value("importerVersion", "");
+    Out.RestPoseKind =
+        Authoring.value("restPoseKind", "");
     Out.SourceEnabled = Value.value("sourceEnabled", true);
     Out.TargetEnabled = Value.value("targetEnabled", true);
     if (!IsCharacterProfileId(Out.ProfileId) ||
@@ -709,6 +726,28 @@ bool ParseProfileDescriptor(
         (!Out.SourceEnabled && !Out.TargetEnabled))
     {
         OutError = "character profile identity or capabilities are invalid";
+        return false;
+    }
+    const bool HasAuthoring =
+        !Out.SourceDefinitionFormat.empty() ||
+        !Out.SourceDefinitionSha256.empty() ||
+        !Out.DefinitionImporter.empty() ||
+        !Out.DefinitionImporterVersion.empty() ||
+        !Out.RestPoseKind.empty();
+    if (HasAuthoring &&
+        (Out.SourceDefinitionFormat.empty() ||
+         !IsSha256(Out.SourceDefinitionSha256) ||
+         Out.DefinitionImporter.empty() ||
+         Out.DefinitionImporter.size() > 128 ||
+         Out.DefinitionImporterVersion.empty() ||
+         Out.DefinitionImporterVersion.size() > 64 ||
+         (Out.RestPoseKind != "t_pose" &&
+          Out.RestPoseKind != "a_pose" &&
+          Out.RestPoseKind != "custom" &&
+          Out.RestPoseKind != "unknown")))
+    {
+        OutError =
+            "character profile authoring provenance is incomplete or invalid";
         return false;
     }
     const auto ProfileEntry = Entries.find(ProfilePath);
@@ -1665,6 +1704,27 @@ ProfilePackResult WriteCharacterProfilePackage(
         return Fail("canonical profile id is invalid");
     if (!Request.SourceEnabled && !Request.TargetEnabled)
         return Fail("profile must be enabled as source or target");
+    const bool HasAuthoring =
+        !Request.SourceDefinitionFormat.empty() ||
+        !Request.SourceDefinitionSha256.empty() ||
+        !Request.DefinitionImporter.empty() ||
+        !Request.DefinitionImporterVersion.empty() ||
+        !Request.RestPoseKind.empty();
+    if (HasAuthoring &&
+        (Request.SourceDefinitionFormat.empty() ||
+         !IsSha256(Request.SourceDefinitionSha256) ||
+         Request.DefinitionImporter.empty() ||
+         Request.DefinitionImporter.size() > 128 ||
+         Request.DefinitionImporterVersion.empty() ||
+         Request.DefinitionImporterVersion.size() > 64 ||
+         (Request.RestPoseKind != "t_pose" &&
+          Request.RestPoseKind != "a_pose" &&
+          Request.RestPoseKind != "custom" &&
+          Request.RestPoseKind != "unknown")))
+    {
+        return Fail(
+            "authoring provenance must provide format, SHA-256, importer, version, and rest pose kind");
+    }
     if (!IsRegularFile(Request.RestFbx) ||
         !HasExtension(Request.RestFbx, ".fbx"))
     {
@@ -1768,6 +1828,16 @@ ProfilePackResult WriteCharacterProfilePackage(
              {"alignmentRetargeterJson",
               ResourceJson(AlignmentEntry)},
          }}};
+    if (HasAuthoring)
+    {
+        ProfileJson["authoring"] = {
+            {"sourceFormat", Request.SourceDefinitionFormat},
+            {"sourceSha256",
+             UpperAscii(Request.SourceDefinitionSha256)},
+            {"importer", Request.DefinitionImporter},
+            {"importerVersion", Request.DefinitionImporterVersion},
+            {"restPoseKind", Request.RestPoseKind}};
+    }
     PendingEntry Profile = InlineEntry(
         ProfilePath, ProfileJson.dump(2) + "\n");
 

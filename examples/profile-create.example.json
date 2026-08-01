@@ -1,0 +1,22 @@
+{
+  "schema": "skrtg.profile_create_request.v1",
+  "schemaVersion": 1,
+  "profile": {
+    "id": "example_character",
+    "version": "1.0.0",
+    "displayName": "Example Character",
+    "canonicalProfileId": "ue5_manny",
+    "restPoseKind": "t_pose",
+    "sourceEnabled": true,
+    "targetEnabled": true
+  },
+  "inputs": {
+    "restFbx": "private/example_character_rest.fbx",
+    "definition": "character-definition.example.json",
+    "alignmentRetargeterJson": "private/canonical_to_example.ikretargeter.json",
+    "format": "auto"
+  },
+  "output": {
+    "package": "out/example_character.skrtgprofile"
+  }
+}
