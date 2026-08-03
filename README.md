@@ -132,6 +132,7 @@ cmake -S . -B build -A x64 `
 - [架构与运行链](docs/ARCHITECTURE.md)
 - [`.skrtgprofile v1` 合同](docs/SKRTGPROFILE_V1.md)
 - [Profile Batch v3 合同](docs/PROFILE_BATCH_V3.md)
+- [性能与计时证据](docs/PERFORMANCE.md)
 - [资产边界](docs/ASSET_POLICY.md)
 - [四角色矩阵验证记录](docs/NON_VICON_MATRIX_V1.md)
 
@@ -243,6 +244,7 @@ This public repository contains source code, tests, and documentation only. Char
 - [Architecture and runtime flow](docs/ARCHITECTURE.md)
 - [`.skrtgprofile v1` contract](docs/SKRTGPROFILE_V1.md)
 - [Profile Batch v3 contract](docs/PROFILE_BATCH_V3.md)
+- [Performance and timing evidence](docs/PERFORMANCE.md)
 - [Asset policy](docs/ASSET_POLICY.md)
 - [Four-profile matrix validation](docs/NON_VICON_MATRIX_V1.md)
 

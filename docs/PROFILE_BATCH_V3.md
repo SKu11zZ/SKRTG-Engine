@@ -53,6 +53,13 @@ Before creating the output directory, the batch planner:
 4. builds the exact Bridge v5 request for every selected clip;
 5. runs Bridge preflight for the complete job list.
 
+The planner hashes and parses immutable shared evidence once per planning
+pass. Later jobs may reuse catalog, Profile, rest, Rig, and alignment evidence,
+while animation FBX and Golden JSON remain job-specific. Every returned
+preflight carries an opaque identity for the complete Bridge request,
+including its output path; supplying it to a different job fails before a
+Worker can start.
+
 If any job fails preflight, no batch output directory is committed. A
 successful plan is then executed with the fixed policy:
 
@@ -68,6 +75,13 @@ One Worker process exits before the next begins. A runtime failure is recorded
 per job; remaining preflighted jobs may continue. Existing non-empty output
 directories are never overwritten.
 
+The Bridge consumes the already completed batch preflight. The Worker still
+re-hashes its solver inputs against the supplied SHA-256 values. After the
+Worker and frozen HTML-to-SKRV adapter finish, the Bridge seals the adapter
+payload in place, creates `integrity.tsv`, performs the normal strict SKRV
+inspection once, and only then commits `review.skrv`. This removes redundant
+whole-package copies and inspections without weakening the SKRV v1 boundary.
+
 Stable outputs use the catalog animation ID:
 
 ```text
@@ -81,7 +95,7 @@ batch_status.json
 Profile-backed status uses:
 
 ```text
-skrtg.native_viewer.batch_retarget_status.v2
+skrtg.native_viewer.batch_retarget_status.v3
 ```
 
 It records top-level package/catalog provenance and per-job animation/Golden
@@ -101,6 +115,16 @@ owner that differs from the bound source profile, a job inventory that differs
 from the declared total, folder-scan semantics, or a non-serial policy.
 The implementation and successful execution of this route do not constitute
 algorithm selection or adoption.
+
+Status v3 adds measured phase timings. Top-level `timings` reports planning,
+execution, and end-to-end wall time. Every job reports planning preflight,
+whether its Bridge preflight was reused, Worker, adapter, package preparation,
+strict package inspection, verified-export copy, and Bridge total time. These
+are elapsed wall-clock measurements, not inferred solver telemetry. Status v2
+remains readable; missing timing fields are interpreted as zero.
+
+The versioned machine contract is
+[`schemas/skrtg.native_viewer.batch_retarget_status.v3.schema.json`](../schemas/skrtg.native_viewer.batch_retarget_status.v3.schema.json).
 
 ## Viewer animation selector
 
@@ -125,6 +149,7 @@ stores one SKRV per animation and SKRV v1 remains unchanged.
 - Legacy external request v1 and loose UE request v2 remain readable and keep
   their original JSON shape.
 - Legacy status v1 does not gain profile provenance.
+- Profile-backed status v2 remains readable; new writers emit v3.
 - The fixed inventory safety limit is 100,000 selected animations.
 - Profiles contain character configuration only; animation FBX and Golden
   JSON remain external catalog assets.

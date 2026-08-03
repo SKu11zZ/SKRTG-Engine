@@ -2,6 +2,7 @@
 
 #include "skrtg/viewer/process.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -93,6 +94,12 @@ struct RetargetBridgeRequest
 struct RetargetBridgePreflight
 {
     bool Success = false;
+    double DurationSeconds = 0.0;
+    std::size_t CacheHits = 0;
+    // Opaque, process-local binding for the complete request. This prevents
+    // cached evidence for one job (including its overwrite-safe output path)
+    // from being supplied to another job.
+    std::string RequestIdentity;
     std::string AssetCatalogSha256;
     std::string SourceProfilePackageSha256;
     std::string TargetProfilePackageSha256;
@@ -109,6 +116,17 @@ struct RetargetBridgePreflight
     std::vector<std::string> Warnings;
 };
 
+struct RetargetBridgeTimings
+{
+    bool PreflightReused = false;
+    double PreflightSeconds = 0.0;
+    double RetargetWorkerSeconds = 0.0;
+    double AdapterSeconds = 0.0;
+    double PackSeconds = 0.0;
+    double PackageInspectSeconds = 0.0;
+    double TotalSeconds = 0.0;
+};
+
 struct RetargetBridgeRunResult
 {
     bool Success = false;
@@ -117,10 +135,13 @@ struct RetargetBridgeRunResult
     std::filesystem::path RetargeterLog;
     std::filesystem::path AdapterLog;
     std::filesystem::path PackLog;
+    std::filesystem::path VerifiedFinalFbx;
+    std::string VerifiedFinalFbxSha256;
     std::string SourceAnimationSha256;
     int RetargeterExitCode = -1;
     int AdapterExitCode = -1;
     int PackExitCode = -1;
+    RetargetBridgeTimings Timings;
     std::vector<std::string> Errors;
 };
 
@@ -149,6 +170,12 @@ std::filesystem::path PathFromUtf8(const std::string& Text);
 RetargetBridgePreflight PreflightRetargetBridge(
     const RetargetBridgeRequest& Request);
 
+// Batch planning shares immutable file/profile/catalog evidence across jobs.
+// Each returned result still binds every job-specific animation and Golden
+// file; no output is created by this call.
+std::vector<RetargetBridgePreflight> PreflightRetargetBridges(
+    const std::vector<RetargetBridgeRequest>& Requests);
+
 bool WriteRetargetBridgeRequest(
     const RetargetBridgeRequest& Request,
     const std::filesystem::path& OutputJson,
@@ -171,5 +198,12 @@ std::vector<std::string> BuildUEIKJsonRetargeterArguments(
 
 RetargetBridgeRunResult RunRetargetBridge(
     const RetargetBridgeRequest& Request);
+
+// Executes a request using evidence produced by the complete-selection batch
+// preflight. The Worker independently re-hashes all solver inputs, preserving
+// fail-closed input binding without repeating profile/catalog parsing.
+RetargetBridgeRunResult RunRetargetBridgePreflighted(
+    const RetargetBridgeRequest& Request,
+    const RetargetBridgePreflight& Preflight);
 
 } // namespace skrtg::viewer

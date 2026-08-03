@@ -413,6 +413,50 @@ int main()
               Inspected.Manifest.VerifiedExportCount == 2,
           "reader returns the semantic manifest summary");
 
+    const std::filesystem::path SealPayload = Root / "seal_payload";
+    const std::filesystem::path SealedPackage =
+        Root / "sealed_review.skrv";
+    Write(SealPayload / "manifest.json", Manifest.dump(2) + "\n");
+    Write(SealPayload / "blobs" / (EmptyHash + ".bin"), Empty);
+    Write(SealPayload / "blobs" / (UintHash + ".bin"), OneUint32);
+    Write(SealPayload / "blobs" / (PoseHash + ".bin"), Pose);
+    Write(SealPayload / "exports" / "foundation.fbx", ExportBytes);
+    Write(SealPayload / "exports" / "final.fbx", ExportBytes);
+    const auto Sealed = skrtg::viewer::skrv::SealDirectoryPackage(
+        SealPayload, SealedPackage);
+    Check(Sealed.Success && Sealed.Entries.size() == 6,
+          "sealed writer commits the adapter payload without a copy stage");
+    Check(!std::filesystem::exists(SealPayload) &&
+              skrtg::viewer::skrv::InspectDirectoryPackage(
+                  SealedPackage).Success,
+          "sealed writer consumes staging input and commits a valid SKRV");
+
+    const std::filesystem::path CorruptSealPayload =
+        Root / "corrupt_seal_payload";
+    const std::filesystem::path CorruptSealedPackage =
+        Root / "corrupt_sealed_review.skrv";
+    Write(
+        CorruptSealPayload / "manifest.json",
+        Manifest.dump(2) + "\n");
+    Write(
+        CorruptSealPayload / "blobs" / (EmptyHash + ".bin"),
+        "not-empty");
+    Write(
+        CorruptSealPayload / "blobs" / (UintHash + ".bin"),
+        OneUint32);
+    Write(
+        CorruptSealPayload / "blobs" / (PoseHash + ".bin"), Pose);
+    Write(
+        CorruptSealPayload / "exports" / "foundation.fbx",
+        ExportBytes);
+    Write(
+        CorruptSealPayload / "exports" / "final.fbx", ExportBytes);
+    Check(
+        !skrtg::viewer::skrv::SealDirectoryPackage(
+             CorruptSealPayload, CorruptSealedPackage).Success &&
+            !std::filesystem::exists(CorruptSealedPackage),
+        "sealed writer fails closed when a digest-named blob is corrupt");
+
     Json UEIKJsonCandidate = Manifest;
     UEIKJsonCandidate["snapshot"]["route"] =
         "ue_ik_json_canonical_bridge_v1";

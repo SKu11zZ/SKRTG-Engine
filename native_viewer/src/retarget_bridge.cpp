@@ -8,11 +8,14 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
+#include <utility>
 
 namespace skrtg::viewer
 {
@@ -37,7 +40,22 @@ constexpr const char* UEIKJsonExactStatusSchema =
 constexpr const char* UEIKJsonCatalogStatusSchema =
     "skrtg.native_viewer.retarget_bridge_status.v4";
 constexpr const char* UEIKJsonProfileStatusSchema =
-    "skrtg.native_viewer.retarget_bridge_status.v5";
+    "skrtg.native_viewer.retarget_bridge_status.v6";
+
+struct CachedHash
+{
+    std::uintmax_t ByteCount = 0;
+    std::filesystem::file_time_type LastWriteTime{};
+    std::string Sha256;
+};
+
+struct PreflightCache
+{
+    std::map<std::string, CachedHash> Hashes;
+    std::map<std::string, profile::ProfileInspectResult> Profiles;
+    std::map<std::string, RetargetAssetCatalogLoadResult> Catalogs;
+    std::size_t Hits = 0;
+};
 
 bool IsRegularFile(const std::filesystem::path& Path)
 {
@@ -172,6 +190,24 @@ bool IsSha256(const std::string& Value)
             });
 }
 
+std::string CachePathKey(const std::filesystem::path& Path)
+{
+    std::error_code Error;
+    std::filesystem::path Resolved =
+        std::filesystem::weakly_canonical(Path, Error);
+    if (Error)
+    {
+        Error.clear();
+        Resolved = std::filesystem::absolute(Path, Error);
+    }
+    std::string Key = PathToUtf8(
+        (Error ? Path : Resolved).lexically_normal());
+#if defined(_WIN32)
+    Key = LowerAscii(std::move(Key));
+#endif
+    return Key;
+}
+
 void AddHashBindingError(
     const std::string& Actual,
     const std::string& Expected,
@@ -217,14 +253,40 @@ bool ComputeHash(
     const std::filesystem::path& Path,
     std::string& OutHash,
     std::vector<std::string>& Errors,
-    const char* Label)
+    const char* Label,
+    PreflightCache* Cache = nullptr)
 {
+    std::error_code MetadataError;
+    const std::uintmax_t ByteCount =
+        std::filesystem::file_size(Path, MetadataError);
+    const std::filesystem::file_time_type LastWriteTime =
+        MetadataError
+        ? std::filesystem::file_time_type{}
+        : std::filesystem::last_write_time(Path, MetadataError);
+    const std::string Key = CachePathKey(Path);
+    if (Cache != nullptr && !MetadataError)
+    {
+        const auto Found = Cache->Hashes.find(Key);
+        if (Found != Cache->Hashes.end() &&
+            Found->second.ByteCount == ByteCount &&
+            Found->second.LastWriteTime == LastWriteTime)
+        {
+            OutHash = Found->second.Sha256;
+            ++Cache->Hits;
+            return true;
+        }
+    }
     std::string Error;
     if (!skrv::Sha256File(Path, OutHash, Error))
     {
         Errors.push_back(std::string("failed to hash ") + Label + ": " +
                          Error);
         return false;
+    }
+    if (Cache != nullptr && !MetadataError)
+    {
+        Cache->Hashes[Key] = {
+            ByteCount, LastWriteTime, OutHash};
     }
     return true;
 }
@@ -237,7 +299,8 @@ bool ResolveBoundSkeleton(
     const std::string& ProfileVersion,
     const bool SourceRole,
     RetargetSkeletonAsset& Out,
-    std::vector<std::string>& Errors)
+    std::vector<std::string>& Errors,
+    PreflightCache* Cache)
 {
     const char* Role = SourceRole ? "source" : "target";
     const std::size_t InitialErrorCount = Errors.size();
@@ -265,8 +328,30 @@ bool ResolveBoundSkeleton(
         return true;
     }
 
-    const profile::ProfileInspectResult Inspection =
-        profile::InspectCharacterProfilePackage(ProfilePackage);
+    const std::string ProfileCacheKey =
+        CachePathKey(ProfilePackage) + "#" +
+        LowerAscii(ProfilePackageSha256);
+    profile::ProfileInspectResult Inspection;
+    if (Cache != nullptr)
+    {
+        const auto Found = Cache->Profiles.find(ProfileCacheKey);
+        if (Found != Cache->Profiles.end())
+        {
+            Inspection = Found->second;
+            ++Cache->Hits;
+        }
+        else
+        {
+            Inspection = profile::InspectCharacterProfilePackage(
+                ProfilePackage);
+            Cache->Profiles.emplace(ProfileCacheKey, Inspection);
+        }
+    }
+    else
+    {
+        Inspection = profile::InspectCharacterProfilePackage(
+            ProfilePackage);
+    }
     if (!Inspection.Success)
     {
         for (const std::string& Error : Inspection.Errors)
@@ -610,6 +695,23 @@ nlohmann::json RunStatusJson(
         Status.erase("sourceProfilePackageSha256");
         Status.erase("targetProfilePackageSha256");
     }
+    else
+    {
+        Status["verifiedFinalFbx"] =
+            PathToUtf8(Result.VerifiedFinalFbx);
+        Status["verifiedFinalFbxSha256"] =
+            Result.VerifiedFinalFbxSha256;
+        Status["timings"] = {
+            {"preflightReused", Result.Timings.PreflightReused},
+            {"preflightSeconds", Result.Timings.PreflightSeconds},
+            {"retargetWorkerSeconds",
+             Result.Timings.RetargetWorkerSeconds},
+            {"adapterSeconds", Result.Timings.AdapterSeconds},
+            {"packSeconds", Result.Timings.PackSeconds},
+            {"packageInspectSeconds",
+             Result.Timings.PackageInspectSeconds},
+            {"totalSeconds", Result.Timings.TotalSeconds}};
+    }
     return Status;
 }
 
@@ -638,6 +740,80 @@ std::string FoundationExportFileName(
         (Request.RouteKind == RetargetBridgeRouteKind::UEIKJsonV1
             ? "__UEIK_Target.fbx"
             : "__External_Target.fbx");
+}
+
+bool FindSealedVerifiedExport(
+    const std::filesystem::path& PackageDirectory,
+    const std::vector<skrv::IntegrityEntry>& Entries,
+    const std::string& ClipId,
+    const std::string& Lane,
+    std::filesystem::path& OutPath,
+    std::string& OutSha256,
+    std::vector<std::string>& Errors)
+{
+    try
+    {
+        std::ifstream Stream(
+            PackageDirectory / "manifest.json", std::ios::binary);
+        if (!Stream)
+        {
+            Errors.push_back("sealed SKRV manifest is not readable");
+            return false;
+        }
+        const nlohmann::json Manifest = nlohmann::json::parse(Stream);
+        for (const nlohmann::json& Export :
+             Manifest.at("verifiedExports"))
+        {
+            if (Export.at("clip_id").get<std::string>() != ClipId ||
+                Export.at("lane").get<std::string>() != Lane)
+            {
+                continue;
+            }
+            const std::filesystem::path Relative = PathFromUtf8(
+                Export.at("path").get<std::string>());
+            const std::string Expected = Export.at("sha256")
+                .get<std::string>();
+            const std::string RelativeKey =
+                LowerAscii(PathToUtf8(Relative.lexically_normal()));
+            const auto Entry = std::find_if(
+                Entries.begin(), Entries.end(),
+                [&](const skrv::IntegrityEntry& Candidate)
+                {
+                    return Candidate.Role == skrv::EntryRole::Export &&
+                        LowerAscii(PathToUtf8(
+                            Candidate.RelativePath.lexically_normal())) ==
+                            RelativeKey &&
+                        LowerAscii(Candidate.Sha256) ==
+                            LowerAscii(Expected);
+                });
+            if (Entry == Entries.end())
+            {
+                Errors.push_back(
+                    "sealed verified export does not match the integrity index");
+                return false;
+            }
+            OutPath = PackageDirectory / Entry->RelativePath;
+            OutSha256 = Entry->Sha256;
+            std::error_code FileError;
+            if (!std::filesystem::is_regular_file(OutPath, FileError) ||
+                FileError)
+            {
+                Errors.push_back(
+                    "sealed verified export is no longer readable");
+                return false;
+            }
+            return true;
+        }
+        Errors.push_back(
+            "sealed SKRV has no verified export for clip/lane");
+    }
+    catch (const std::exception& Error)
+    {
+        Errors.push_back(
+            "sealed verified export metadata is invalid: " +
+            std::string(Error.what()));
+    }
+    return false;
 }
 } // namespace
 
@@ -849,10 +1025,118 @@ std::string MakeBridgeClipId(const std::filesystem::path& AnimationPath)
     return Result.empty() ? "selected_animation" : Result;
 }
 
-RetargetBridgePreflight PreflightRetargetBridge(
-    const RetargetBridgeRequest& Request)
+std::string RequestIdentity(const RetargetBridgeRequest& Request)
 {
+    const auto PathIdentity =
+        [](const std::filesystem::path& Path)
+        {
+            if (Path.empty()) return std::string();
+            std::error_code Error;
+            std::filesystem::path Resolved = Path.is_absolute()
+                ? Path
+                : std::filesystem::absolute(Path, Error);
+            std::string Result = PathToUtf8(
+                (Error ? Path : Resolved).lexically_normal());
+#if defined(_WIN32)
+            Result = LowerAscii(std::move(Result));
+#endif
+            return Result;
+        };
+    const RetargetBridgeAssetBinding& Binding = Request.AssetBinding;
+    const nlohmann::json Identity = {
+        {"routeKind", RetargetBridgeRouteKindName(Request.RouteKind)},
+        {"sourceAnimationFbx", PathIdentity(Request.SourceAnimationFbx)},
+        {"targetSkeletonFbx", PathIdentity(Request.TargetSkeletonFbx)},
+        {"sourceRestFbx", PathIdentity(Request.SourceRestFbx)},
+        {"sourceRigJson", PathIdentity(Request.SourceRigJson)},
+        {"targetRigJson", PathIdentity(Request.TargetRigJson)},
+        {"sourceAlignmentRetargeterJson",
+         PathIdentity(Request.SourceAlignmentRetargeterJson)},
+        {"targetAlignmentRetargeterJson",
+         PathIdentity(Request.TargetAlignmentRetargeterJson)},
+        {"sourceAnimationGoldenJson",
+         PathIdentity(Request.SourceAnimationGoldenJson)},
+        {"outputDirectory", PathIdentity(Request.OutputDirectory)},
+        {"clipId", Request.ClipId},
+        {"clipLabel", Request.ClipLabel},
+        {"animationStack", Request.AnimationStack},
+        {"sourceFbxImportMode",
+         RetargetBridgeSourceFbxImportModeName(
+             Request.SourceFbxImportMode)},
+        {"restFbxImportMode",
+         RetargetBridgeRestFbxImportModeName(Request.RestFbxImportMode)},
+        {"enableSpinePelvisFollow", Request.EnableSpinePelvisFollow},
+        {"enableSourceMotionFootLock", Request.EnableSourceMotionFootLock},
+        {"tools", {
+            {"bridgeExecutable", PathIdentity(Request.Tools.BridgeExecutable)},
+            {"retargeterExecutable",
+             PathIdentity(Request.Tools.RetargeterExecutable)},
+            {"ueIkRetargeterExecutable",
+             PathIdentity(Request.Tools.UEIKRetargeterExecutable)},
+            {"nodeExecutable", PathIdentity(Request.Tools.NodeExecutable)},
+            {"adapterScript", PathIdentity(Request.Tools.AdapterScript)},
+            {"skrvPackExecutable",
+             PathIdentity(Request.Tools.SkrvPackExecutable)},
+            {"canonicalJson", PathIdentity(Request.Tools.CanonicalJson)},
+            {"defaultSourceRestFbx",
+             PathIdentity(Request.Tools.DefaultSourceRestFbx)}
+        }},
+        {"assetBinding", {
+            {"required", Binding.Required},
+            {"catalogFile", PathIdentity(Binding.CatalogFile)},
+            {"catalogSha256", LowerAscii(Binding.CatalogSha256)},
+            {"catalogId", Binding.CatalogId},
+            {"sourceSkeletonId", Binding.SourceSkeletonId},
+            {"targetSkeletonId", Binding.TargetSkeletonId},
+            {"sourceAnimationId", Binding.SourceAnimationId},
+            {"sourceAnimationSkeletonId",
+             Binding.SourceAnimationSkeletonId},
+            {"sourceProfilePackage",
+             PathIdentity(Binding.SourceProfilePackage)},
+            {"sourceProfilePackageSha256",
+             LowerAscii(Binding.SourceProfilePackageSha256)},
+            {"sourceProfileVersion", Binding.SourceProfileVersion},
+            {"targetProfilePackage",
+             PathIdentity(Binding.TargetProfilePackage)},
+            {"targetProfilePackageSha256",
+             LowerAscii(Binding.TargetProfilePackageSha256)},
+            {"targetProfileVersion", Binding.TargetProfileVersion},
+            {"sourceAnimationSha256",
+             LowerAscii(Binding.SourceAnimationSha256)},
+            {"sourceRestSha256", LowerAscii(Binding.SourceRestSha256)},
+            {"targetRestSha256", LowerAscii(Binding.TargetRestSha256)},
+            {"sourceRigJsonSha256",
+             LowerAscii(Binding.SourceRigJsonSha256)},
+            {"targetRigJsonSha256",
+             LowerAscii(Binding.TargetRigJsonSha256)},
+            {"sourceAlignmentRetargeterJsonSha256",
+             LowerAscii(Binding.SourceAlignmentRetargeterJsonSha256)},
+            {"targetAlignmentRetargeterJsonSha256",
+             LowerAscii(Binding.TargetAlignmentRetargeterJsonSha256)},
+            {"sourceAnimationGoldenJsonSha256",
+             LowerAscii(Binding.SourceAnimationGoldenJsonSha256)}
+        }}
+    };
+    return Identity.dump();
+}
+
+static RetargetBridgePreflight PreflightRetargetBridgeImpl(
+    const RetargetBridgeRequest& Request,
+    PreflightCache* Cache)
+{
+    const auto Started = std::chrono::steady_clock::now();
+    const std::size_t InitialCacheHits =
+        Cache == nullptr ? 0 : Cache->Hits;
     RetargetBridgePreflight Result;
+    const auto Finish = [&]() -> RetargetBridgePreflight
+    {
+        Result.DurationSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - Started).count();
+        Result.CacheHits = Cache == nullptr
+            ? 0 : Cache->Hits - InitialCacheHits;
+        return std::move(Result);
+    };
+    Result.RequestIdentity = RequestIdentity(Request);
     const bool UEIKJson =
         Request.RouteKind == RetargetBridgeRouteKind::UEIKJsonV1;
     const bool ExactSourceImport =
@@ -1141,21 +1425,21 @@ RetargetBridgePreflight PreflightRetargetBridge(
         Result.Errors.push_back(
             "frozen FootLock bridge requires the frozen Spine/Pelvis prerequisite");
     }
-    if (!Result.Errors.empty()) return Result;
+    if (!Result.Errors.empty()) return Finish();
 
     if (Request.AssetBinding.Required)
     {
         ComputeHash(
             Request.AssetBinding.CatalogFile,
             Result.AssetCatalogSha256,
-            Result.Errors, "retarget asset catalog JSON");
+            Result.Errors, "retarget asset catalog JSON", Cache);
         if (!Request.AssetBinding.SourceProfilePackage.empty())
         {
             ComputeHash(
                 Request.AssetBinding.SourceProfilePackage,
                 Result.SourceProfilePackageSha256,
                 Result.Errors,
-                "source character profile package");
+                "source character profile package", Cache);
         }
         if (!Request.AssetBinding.TargetProfilePackage.empty())
         {
@@ -1163,52 +1447,55 @@ RetargetBridgePreflight PreflightRetargetBridge(
                 Request.AssetBinding.TargetProfilePackage,
                 Result.TargetProfilePackageSha256,
                 Result.Errors,
-                "target character profile package");
+                "target character profile package", Cache);
         }
     }
     ComputeHash(
         Request.SourceAnimationFbx,
-        Result.SourceAnimationSha256, Result.Errors, "source animation");
+        Result.SourceAnimationSha256, Result.Errors, "source animation",
+        Cache);
     ComputeHash(
         Request.SourceRestFbx,
-        Result.SourceRestSha256, Result.Errors, "source rest");
+        Result.SourceRestSha256, Result.Errors, "source rest", Cache);
     ComputeHash(
         Request.TargetSkeletonFbx,
-        Result.TargetSkeletonSha256, Result.Errors, "target skeleton");
+        Result.TargetSkeletonSha256, Result.Errors, "target skeleton",
+        Cache);
     if (UEIKJson)
     {
         ComputeHash(
             Request.SourceRigJson,
             Result.SourceRigJsonSha256, Result.Errors,
-            "source IK Rig JSON");
+            "source IK Rig JSON", Cache);
         ComputeHash(
             Request.TargetRigJson,
             Result.TargetRigJsonSha256, Result.Errors,
-            "target IK Rig JSON");
+            "target IK Rig JSON", Cache);
         ComputeHash(
             Request.SourceAlignmentRetargeterJson,
             Result.SourceAlignmentRetargeterJsonSha256, Result.Errors,
-            "source alignment IK Retargeter JSON");
+            "source alignment IK Retargeter JSON", Cache);
         ComputeHash(
             Request.TargetAlignmentRetargeterJson,
             Result.TargetAlignmentRetargeterJsonSha256, Result.Errors,
-            "target alignment IK Retargeter JSON");
+            "target alignment IK Retargeter JSON", Cache);
         if (ExactSourceImport)
         {
             ComputeHash(
                 Request.SourceAnimationGoldenJson,
                 Result.SourceAnimationGoldenJsonSha256,
                 Result.Errors,
-                "source animation golden JSON");
+                "source animation golden JSON", Cache);
         }
     }
     else
     {
         ComputeHash(
             Request.Tools.CanonicalJson,
-            Result.CanonicalSha256, Result.Errors, "frozen canonical");
+            Result.CanonicalSha256, Result.Errors, "frozen canonical",
+            Cache);
     }
-    if (!Result.Errors.empty()) return Result;
+    if (!Result.Errors.empty()) return Finish();
 
     if (Request.AssetBinding.Required)
     {
@@ -1277,10 +1564,38 @@ RetargetBridgePreflight PreflightRetargetBridge(
             ExternalSkeletonIds.push_back(
                 Binding.TargetSkeletonId);
         }
-        const RetargetAssetCatalogLoadResult CatalogResult =
-            LoadRetargetAssetCatalog(
-                Binding.CatalogFile, false,
-                ExternalSkeletonIds);
+        const std::string CatalogCacheKey =
+            CachePathKey(Binding.CatalogFile) + "#" +
+            LowerAscii(Result.AssetCatalogSha256) + "#" +
+            [&]()
+            {
+                std::string Key;
+                for (const std::string& Id : ExternalSkeletonIds)
+                    Key += Id + ";";
+                return Key;
+            }();
+        RetargetAssetCatalogLoadResult CatalogResult;
+        if (Cache != nullptr)
+        {
+            const auto Found = Cache->Catalogs.find(CatalogCacheKey);
+            if (Found != Cache->Catalogs.end())
+            {
+                CatalogResult = Found->second;
+                ++Cache->Hits;
+            }
+            else
+            {
+                CatalogResult = LoadRetargetAssetCatalog(
+                    Binding.CatalogFile, false, ExternalSkeletonIds);
+                Cache->Catalogs.emplace(
+                    CatalogCacheKey, CatalogResult);
+            }
+        }
+        else
+        {
+            CatalogResult = LoadRetargetAssetCatalog(
+                Binding.CatalogFile, false, ExternalSkeletonIds);
+        }
         if (!CatalogResult.Success)
         {
             for (const std::string& Error : CatalogResult.Errors)
@@ -1342,13 +1657,13 @@ RetargetBridgePreflight PreflightRetargetBridge(
                 Binding.SourceProfilePackage,
                 Binding.SourceProfilePackageSha256,
                 Binding.SourceProfileVersion, true,
-                Source, Result.Errors);
+                Source, Result.Errors, Cache);
             const bool TargetValid = ResolveBoundSkeleton(
                 Catalog, Binding.TargetSkeletonId,
                 Binding.TargetProfilePackage,
                 Binding.TargetProfilePackageSha256,
                 Binding.TargetProfileVersion, false,
-                Target, Result.Errors);
+                Target, Result.Errors, Cache);
             if (AnimationValid && SourceValid && TargetValid)
             {
                 if (Animation->SourceSkeletonSignatureSha256 !=
@@ -1457,7 +1772,7 @@ RetargetBridgePreflight PreflightRetargetBridge(
                 }
             }
         }
-        if (!Result.Errors.empty()) return Result;
+        if (!Result.Errors.empty()) return Finish();
     }
 
     if (UEIKJson)
@@ -1483,7 +1798,25 @@ RetargetBridgePreflight PreflightRetargetBridge(
             "independently before any SKRV is committed.");
     }
     Result.Success = Result.Errors.empty();
-    return Result;
+    return Finish();
+}
+
+RetargetBridgePreflight PreflightRetargetBridge(
+    const RetargetBridgeRequest& Request)
+{
+    return PreflightRetargetBridgeImpl(Request, nullptr);
+}
+
+std::vector<RetargetBridgePreflight> PreflightRetargetBridges(
+    const std::vector<RetargetBridgeRequest>& Requests)
+{
+    std::vector<RetargetBridgePreflight> Results;
+    Results.reserve(Requests.size());
+    PreflightCache Cache;
+    for (const RetargetBridgeRequest& Request : Requests)
+        Results.push_back(
+            PreflightRetargetBridgeImpl(Request, &Cache));
+    return Results;
 }
 
 bool WriteRetargetBridgeRequest(
@@ -1773,8 +2106,9 @@ std::vector<std::string> BuildUEIKJsonRetargeterArguments(
     return Arguments;
 }
 
-RetargetBridgeRunResult RunRetargetBridge(
-    const RetargetBridgeRequest& Request)
+static RetargetBridgeRunResult RunRetargetBridgeImpl(
+    const RetargetBridgeRequest& Request,
+    const RetargetBridgePreflight* SuppliedPreflight)
 {
     RetargetBridgeRequest Resolved = Request;
     bool ResolvedAnyPath = false;
@@ -1812,21 +2146,40 @@ RetargetBridgeRunResult RunRetargetBridge(
     ResolvePath(Resolved.Tools.CanonicalJson);
     ResolvePath(Resolved.Tools.DefaultSourceRestFbx);
     if (ResolvedAnyPath)
-        return RunRetargetBridge(Resolved);
+        return RunRetargetBridgeImpl(Resolved, SuppliedPreflight);
 
     RetargetBridgeRunResult Result;
+    const auto TotalStarted = std::chrono::steady_clock::now();
     Result.StatusJson = Request.OutputDirectory / "bridge_status.json";
     Result.ReviewPackage = Request.OutputDirectory / "review.skrv";
     Result.RetargeterLog = Request.OutputDirectory / "retargeter.log";
     Result.AdapterLog = Request.OutputDirectory / "adapter.log";
     Result.PackLog = Request.OutputDirectory / "pack.log";
-    const RetargetBridgePreflight Preflight =
-        PreflightRetargetBridge(Request);
+    const auto PreflightStarted = std::chrono::steady_clock::now();
+    RetargetBridgePreflight Preflight = SuppliedPreflight == nullptr
+        ? PreflightRetargetBridge(Request)
+        : *SuppliedPreflight;
+    if (SuppliedPreflight != nullptr &&
+        Preflight.RequestIdentity != RequestIdentity(Request))
+    {
+        Preflight.Success = false;
+        Preflight.Errors.push_back(
+            "supplied complete-selection preflight does not match this "
+            "retarget request");
+    }
+    Result.Timings.PreflightReused = SuppliedPreflight != nullptr;
+    Result.Timings.PreflightSeconds =
+        SuppliedPreflight == nullptr
+        ? std::chrono::duration<double>(
+              std::chrono::steady_clock::now() - PreflightStarted).count()
+        : 0.0;
     Result.SourceAnimationSha256 = Preflight.SourceAnimationSha256;
     Result.Errors = Preflight.Errors;
     std::error_code DirectoryError;
     if (!Preflight.Success)
     {
+        Result.Timings.TotalSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - TotalStarted).count();
         if (!Request.OutputDirectory.empty() &&
             DirectoryEmptyOrAbsent(Request.OutputDirectory))
         {
@@ -1846,6 +2199,8 @@ RetargetBridgeRunResult RunRetargetBridge(
     if (DirectoryError)
     {
         Result.Errors.push_back("failed to create bridge output directory");
+        Result.Timings.TotalSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - TotalStarted).count();
         return Result;
     }
     const std::filesystem::path RetargeterOutput =
@@ -1855,6 +2210,7 @@ RetargetBridgeRunResult RunRetargetBridge(
     const bool UEIKJson =
         Request.RouteKind == RetargetBridgeRouteKind::UEIKJsonV1;
 
+    auto PhaseStarted = std::chrono::steady_clock::now();
     ProcessRunResult Process = RunProcessBlocking({
         UEIKJson
             ? Request.Tools.UEIKRetargeterExecutable
@@ -1866,6 +2222,9 @@ RetargetBridgeRunResult RunRetargetBridge(
                 Request, Preflight, RetargeterOutput),
         Request.OutputDirectory,
         Result.RetargeterLog});
+    Result.Timings.RetargetWorkerSeconds =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - PhaseStarted).count();
     Result.RetargeterExitCode = Process.ExitCode;
     if (!Process.Started || Process.ExitCode != 0)
     {
@@ -1880,6 +2239,7 @@ RetargetBridgeRunResult RunRetargetBridge(
     else
     {
         const std::filesystem::path Review = RetargeterOutput / "Review";
+        PhaseStarted = std::chrono::steady_clock::now();
         Process = RunProcessBlocking({
             Request.Tools.NodeExecutable,
             {PathToUtf8(Request.Tools.AdapterScript),
@@ -1889,6 +2249,9 @@ RetargetBridgeRunResult RunRetargetBridge(
              PathToUtf8(Payload)},
             Request.OutputDirectory,
             Result.AdapterLog});
+        Result.Timings.AdapterSeconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - PhaseStarted).count();
         Result.AdapterExitCode = Process.ExitCode;
         if (!Process.Started || Process.ExitCode != 0)
         {
@@ -1898,35 +2261,76 @@ RetargetBridgeRunResult RunRetargetBridge(
         }
         else
         {
-            Process = RunProcessBlocking({
-                Request.Tools.SkrvPackExecutable,
-                {PathToUtf8(Payload), PathToUtf8(Result.ReviewPackage)},
-                Request.OutputDirectory,
-                Result.PackLog});
-            Result.PackExitCode = Process.ExitCode;
-            if (!Process.Started || Process.ExitCode != 0)
+            PhaseStarted = std::chrono::steady_clock::now();
+            const skrv::PackageWriteResult Package =
+                skrv::SealDirectoryPackage(
+                    Payload, Result.ReviewPackage);
+            const double PackTotalSeconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - PhaseStarted)
+                    .count();
+            Result.Timings.PackageInspectSeconds =
+                Package.InspectionSeconds;
+            Result.Timings.PackSeconds = std::max(
+                0.0, PackTotalSeconds - Package.InspectionSeconds);
+            Result.PackExitCode = Package.Success ? 0 : 1;
+            std::uintmax_t IndexedBytes = 0;
+            for (const skrv::IntegrityEntry& Entry : Package.Entries)
+                IndexedBytes += Entry.ByteCount;
+            std::ostringstream PackSummary;
+            if (Package.Success)
             {
-                Result.Errors.push_back(Process.Error.empty()
-                    ? "SKRV pack failed; see pack.log"
-                    : Process.Error);
+                PackSummary
+                    << "SKRV package sealed in process\n"
+                    << "path=" << PathToUtf8(Result.ReviewPackage)
+                    << '\n'
+                    << "indexed_files=" << Package.Entries.size()
+                    << '\n'
+                    << "indexed_bytes=" << IndexedBytes << '\n'
+                    << "preparation_seconds="
+                    << Package.PreparationSeconds << '\n'
+                    << "inspection_seconds="
+                    << Package.InspectionSeconds << '\n';
             }
             else
             {
-                const skrv::PackageInspectResult Inspection =
-                    skrv::InspectDirectoryPackage(Result.ReviewPackage);
-                if (!Inspection.Success)
+                PackSummary << "SKRV package sealing failed\n";
+                for (const std::string& Error : Package.Errors)
+                    PackSummary << "error=" << Error << '\n';
+            }
+            std::string PackLogError;
+            if (!WriteTextAtomic(
+                    Result.PackLog, PackSummary.str(), PackLogError))
+            {
+                Result.Errors.push_back(PackLogError);
+            }
+            if (!Package.Success)
+            {
+                if (Package.Errors.empty())
+                    Result.Errors.push_back(
+                        "SKRV package sealing failed; see pack.log");
+                else
                 {
                     Result.Errors.insert(
                         Result.Errors.end(),
-                        Inspection.Errors.begin(), Inspection.Errors.end());
+                        Package.Errors.begin(), Package.Errors.end());
                 }
-                else
-                {
-                    Result.Success = true;
-                }
+            }
+            else if (FindSealedVerifiedExport(
+                         Result.ReviewPackage,
+                         Package.Entries,
+                         Request.ClipId,
+                         "final",
+                         Result.VerifiedFinalFbx,
+                         Result.VerifiedFinalFbxSha256,
+                         Result.Errors))
+            {
+                Result.Success = true;
             }
         }
     }
+    Result.Timings.TotalSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - TotalStarted).count();
     std::string StatusError;
     if (!WriteTextAtomic(
             Result.StatusJson,
@@ -1937,6 +2341,19 @@ RetargetBridgeRunResult RunRetargetBridge(
         Result.Errors.push_back(StatusError);
     }
     return Result;
+}
+
+RetargetBridgeRunResult RunRetargetBridge(
+    const RetargetBridgeRequest& Request)
+{
+    return RunRetargetBridgeImpl(Request, nullptr);
+}
+
+RetargetBridgeRunResult RunRetargetBridgePreflighted(
+    const RetargetBridgeRequest& Request,
+    const RetargetBridgePreflight& Preflight)
+{
+    return RunRetargetBridgeImpl(Request, &Preflight);
 }
 
 } // namespace skrtg::viewer

@@ -51,9 +51,20 @@ struct PackageWriteResult
 {
     bool Success = false;
     std::filesystem::path OutputDirectory;
+    double PreparationSeconds = 0.0;
+    double InspectionSeconds = 0.0;
     std::vector<IntegrityEntry> Entries;
     std::vector<std::string> Errors;
 };
+
+// Converts an adapter-owned payload directory into a verified SKRV package
+// without copying the complete payload through a second directory first.
+// The payload is atomically moved to a private stage, receives an integrity
+// index, passes the normal strict package inspection, and is then committed.
+// On failure no output package is committed.
+PackageWriteResult SealDirectoryPackage(
+    const std::filesystem::path& PayloadDirectory,
+    const std::filesystem::path& OutputDirectory);
 
 struct PackageInspectOptions
 {

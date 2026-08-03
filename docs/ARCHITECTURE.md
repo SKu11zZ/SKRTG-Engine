@@ -20,7 +20,7 @@ Installed .skrtgprofile v1 packages
   -> complete-selection preflight
   -> UE IK JSON Worker
   -> verified target FBX + review payload
-  -> SKRV packer
+  -> in-process SKRV seal + strict inspection
   -> native Viewer
 ```
 
@@ -50,6 +50,21 @@ preflights all jobs before creating the output directory. It never scans a
 loose animation folder. Execution remains streaming and serial: one Worker
 process exits before the next starts. Legacy request v1/v2 remains readable
 without acquiring profile or catalog provenance.
+
+Within one complete-selection preflight, immutable file hashes and parsed
+catalog/Profile evidence are cached across jobs. Job-specific FBX and Golden
+evidence is still checked independently. The reusable result is bound to the
+full resolved Bridge request and output directory, and the Worker independently
+checks every solver input hash. This is a planning optimization, not a weaker
+trust boundary.
+
+The adapter produces an uncommitted SKRV payload beside the final package.
+The Bridge atomically isolates that directory, inventories safe regular files,
+derives already-declared blob/export digests, writes the integrity index, and
+runs the standard strict SKRV inspection. Only a successful inspection is
+renamed to `review.skrv`. The compatibility `skrv_pack` executable remains,
+but the normal in-process Bridge path avoids copying and hashing the complete
+payload through an extra package directory.
 
 ## Coordinate path
 
@@ -88,6 +103,8 @@ synchronized four-view state.
 ## Failure policy
 
 - all external inputs are SHA-256 bound;
+- cached preflight evidence is limited to one planning pass and exact-request
+  identities; a cross-job or cross-output mismatch fails before execution;
 - route and hierarchy mismatches fail closed;
 - output directories follow no-overwrite rules;
 - profile-backed batch jobs all preflight before output creation and run one
@@ -95,6 +112,8 @@ synchronized four-view state.
 - a batch clip keeps its own catalog ID, owner, FBX hash, Golden JSON hash,
   stack name, and import modes in request and status provenance;
 - profile-backed batch status cannot select or adopt the candidate route;
+- SKRV payload sealing commits no output until the ordinary strict inspector
+  has validated content hashes and manifest semantics;
 - staged operations commit only after validation;
 - missing private catalogs produce an empty Viewer, not inferred defaults.
 - profile installation uses a verified partial directory and atomic rename;

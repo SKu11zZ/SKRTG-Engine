@@ -84,6 +84,9 @@ struct BatchRetargetJob
     std::string FinalFbxSha256;
     BatchRetargetJobState State = BatchRetargetJobState::Pending;
     double DurationSeconds = 0.0;
+    double PlanningPreflightSeconds = 0.0;
+    double VerifiedExportCopySeconds = 0.0;
+    RetargetBridgeTimings BridgeTimings;
     std::vector<std::string> Errors;
 };
 
@@ -92,6 +95,7 @@ struct BatchRetargetPlan
     bool Success = false;
     std::size_t MaximumConcurrentJobs = 1;
     std::vector<BatchRetargetJob> Jobs;
+    std::vector<RetargetBridgePreflight> Preflights;
     std::vector<std::string> Errors;
     std::vector<std::string> Warnings;
 };
@@ -110,6 +114,8 @@ struct BatchRetargetStatus
     std::size_t ActiveJobIndex = 0;
     bool HasActiveJob = false;
     double DurationSeconds = 0.0;
+    double PlanningDurationSeconds = 0.0;
+    double WallDurationSeconds = 0.0;
     BatchCharacterInput SourceCharacter;
     BatchCharacterInput TargetCharacter;
     std::filesystem::path AnimationDirectory;

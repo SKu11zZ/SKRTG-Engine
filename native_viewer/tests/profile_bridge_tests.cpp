@@ -382,6 +382,8 @@ void TestProfileBoundBridge()
     }
     Check(Preflight.Success,
           "profile-bound Bridge request should pass preflight");
+    Check(Preflight.DurationSeconds > 0.0,
+          "Bridge preflight should report measured elapsed time");
     Check(Preflight.SourceProfilePackageSha256 ==
               Binding.SourceProfilePackageSha256,
           "source profile package hash should be audited");
@@ -462,8 +464,32 @@ void TestProfileBoundBridge()
           "profile-backed batch v3 should preflight every selected "
           "catalog animation");
     Check(BatchPlan.MaximumConcurrentJobs == 1 &&
-              BatchPlan.Jobs.size() == 2,
+              BatchPlan.Jobs.size() == 2 &&
+              BatchPlan.Preflights.size() == 2,
           "profile-backed batch must preserve fixed serial execution");
+    Check(BatchPlan.Preflights[1].CacheHits > 0,
+          "complete-selection preflight should reuse shared profile, "
+          "catalog, rest, and rig evidence across animations");
+    RetargetBridgeRequest MismatchedExecution = Request;
+    MismatchedExecution.OutputDirectory =
+        Root.Path / "mismatched_preflight_output";
+    const RetargetBridgeRunResult MismatchedResult =
+        RunRetargetBridgePreflighted(
+            MismatchedExecution, BatchPlan.Preflights[1]);
+    Check(!MismatchedResult.Success &&
+              MismatchedResult.RetargeterExitCode == -1 &&
+              MismatchedResult.Timings.TotalSeconds > 0.0 &&
+              std::any_of(
+                  MismatchedResult.Errors.begin(),
+                  MismatchedResult.Errors.end(),
+                  [](const std::string& ErrorText)
+                  {
+                      return ErrorText.find(
+                          "preflight does not match") !=
+                          std::string::npos;
+                  }),
+          "preflight reuse must fail closed when supplied to a different "
+          "request or output directory");
     Check(BatchPlan.Jobs.size() == 2 &&
               BatchPlan.Jobs[1].SourceAnimationId ==
                   "source_clip_two" &&
@@ -525,9 +551,13 @@ void TestProfileBoundBridge()
     Check(WriteBatchRetargetStatus(
               BatchStatus, BatchStatusFile, Error),
           "profile-backed batch status v2 should serialize");
-    Check(Json::parse(Read(BatchStatusFile)).at("schema") ==
-              "skrtg.native_viewer.batch_retarget_status.v2",
-          "profile-backed status must use the versioned v2 schema");
+    const Json WrittenBatchStatus =
+        Json::parse(Read(BatchStatusFile));
+    Check(WrittenBatchStatus.at("schema") ==
+              "skrtg.native_viewer.batch_retarget_status.v3" &&
+              WrittenBatchStatus.contains("timings") &&
+              WrittenBatchStatus.at("jobs").at(0).contains("timings"),
+          "profile-backed status v3 must expose batch and per-job timings");
     BatchRetargetStatus StatusRoundTrip;
     Check(ReadBatchRetargetStatus(
               BatchStatusFile, StatusRoundTrip, Error) &&
@@ -537,6 +567,23 @@ void TestProfileBoundBridge()
                   Golden,
           "profile-backed status v2 must retain package and per-job "
           "Golden provenance");
+    Json CompatibleV2Status = WrittenBatchStatus;
+    CompatibleV2Status["schema"] =
+        "skrtg.native_viewer.batch_retarget_status.v2";
+    CompatibleV2Status.erase("timings");
+    for (Json& Job : CompatibleV2Status["jobs"])
+        Job.erase("timings");
+    const std::filesystem::path CompatibleV2StatusFile =
+        Root.Path / "batch_status_v2_compatible.json";
+    Write(
+        CompatibleV2StatusFile,
+        CompatibleV2Status.dump(2) + "\n");
+    BatchRetargetStatus CompatibleV2RoundTrip;
+    Check(ReadBatchRetargetStatus(
+              CompatibleV2StatusFile,
+              CompatibleV2RoundTrip, Error) &&
+              CompatibleV2RoundTrip.Jobs.size() == 2,
+          "new reader must retain profile-backed status v2 compatibility");
     StatusRoundTrip.Jobs[0].State =
         BatchRetargetJobState::Succeeded;
     StatusRoundTrip.Jobs[1].State =

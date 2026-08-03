@@ -109,6 +109,18 @@ skrtg bridge run --request .\bridge-request.json --json
 Batch remains intentionally serial (`maximumConcurrentJobs=1`) until a later
 memory and determinism gate explicitly changes that contract.
 
+New profile-backed runs write batch status v3 and Bridge status v6. Both expose
+measured phase timings, so an agent can distinguish preflight, Worker,
+adapter, SKRV preparation/inspection, and final verified-export copy time
+without scraping logs. The corresponding schemas are:
+
+- [`skrtg.native_viewer.batch_retarget_status.v3`](../schemas/skrtg.native_viewer.batch_retarget_status.v3.schema.json)
+- [`skrtg.native_viewer.retarget_bridge_status.v6`](../schemas/skrtg.native_viewer.retarget_bridge_status.v6.schema.json)
+
+Older profile-backed batch status v2 remains readable. Timing values are
+elapsed wall-clock observations for the completed process phases; they do not
+claim per-operation solver profiling.
+
 ## Agent diagnostics
 
 `debug` returns the full resolved preflight evidence rather than a short

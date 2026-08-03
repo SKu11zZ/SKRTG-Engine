@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.native_viewer.retarget_bridge_status.v6.schema.json",
+  "title": "SKRTG profile-backed retarget Bridge status v6",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "routeKind", "assetSelection", "success", "reviewPackage",
+    "sourceAnimationFbx", "assetCatalogSha256",
+    "sourceProfilePackageSha256", "targetProfilePackageSha256",
+    "sourceAnimationSha256", "sourceRestFbx", "sourceRestSha256",
+    "targetSkeletonFbx", "targetSkeletonSha256", "canonicalSha256",
+    "sourceRigJsonSha256", "targetRigJsonSha256",
+    "sourceAlignmentRetargeterJsonSha256",
+    "targetAlignmentRetargeterJsonSha256",
+    "sourceAnimationGoldenJsonSha256", "sourceFbxImportMode",
+    "restFbxImportMode", "foundationRoute", "foundationFrozen",
+    "routeSelected", "routeAdopted", "skrvV1Modified", "n3Started",
+    "n4Started", "n4Scope", "retargeterExitCode", "adapterExitCode",
+    "packExitCode", "logs", "errors", "verifiedFinalFbx",
+    "verifiedFinalFbxSha256", "timings"
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "sha256OrEmpty": {
+      "type": "string",
+      "pattern": "^([A-Fa-f0-9]{64})?$"
+    },
+    "seconds": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "properties": {
+    "schema": { "const": "skrtg.native_viewer.retarget_bridge_status.v6" },
+    "routeKind": { "const": "ue_ik_json_v1" },
+    "assetSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required", "catalogFile", "catalogSha256", "catalogId",
+        "sourceSkeletonId", "targetSkeletonId", "sourceAnimationId",
+        "sourceAnimationSkeletonId", "sourceProfilePackage",
+        "sourceProfilePackageSha256", "sourceProfileVersion",
+        "targetProfilePackage", "targetProfilePackageSha256",
+        "targetProfileVersion"
+      ],
+      "properties": {
+        "required": { "const": true },
+        "catalogFile": { "type": "string", "minLength": 1 },
+        "catalogSha256": { "$ref": "#/$defs/sha256" },
+        "catalogId": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "sourceSkeletonId": { "type": "string", "minLength": 1 },
+        "targetSkeletonId": { "type": "string", "minLength": 1 },
+        "sourceAnimationId": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "sourceAnimationSkeletonId": { "type": "string", "minLength": 1 },
+        "sourceProfilePackage": { "type": "string" },
+        "sourceProfilePackageSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+        "sourceProfileVersion": { "type": "string" },
+        "targetProfilePackage": { "type": "string" },
+        "targetProfilePackageSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+        "targetProfileVersion": { "type": "string" }
+      }
+    },
+    "success": { "type": "boolean" },
+    "reviewPackage": { "type": "string", "minLength": 1 },
+    "sourceAnimationFbx": { "type": "string", "minLength": 1 },
+    "assetCatalogSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "sourceProfilePackageSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "targetProfilePackageSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "sourceAnimationSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "sourceRestFbx": { "type": "string", "minLength": 1 },
+    "sourceRestSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "targetSkeletonFbx": { "type": "string", "minLength": 1 },
+    "targetSkeletonSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "canonicalSha256": { "const": "" },
+    "sourceRigJsonSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "targetRigJsonSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "sourceAlignmentRetargeterJsonSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "targetAlignmentRetargeterJsonSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "sourceAnimationGoldenJsonSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "sourceFbxImportMode": { "const": "ue5.8_exact_golden_v1" },
+    "restFbxImportMode": { "const": "ue5.8_exported_y_reflection_v1" },
+    "foundationRoute": { "const": "ue_ik_json_fk_pelvis_limb_ik_candidate_v1" },
+    "foundationFrozen": { "const": false },
+    "routeSelected": { "const": false },
+    "routeAdopted": { "const": false },
+    "skrvV1Modified": { "const": false },
+    "n3Started": { "const": false },
+    "n4Started": { "const": true },
+    "n4Scope": { "const": "viewer-ui-playback-operation-stack-verified-export" },
+    "retargeterExitCode": { "type": "integer" },
+    "adapterExitCode": { "type": "integer" },
+    "packExitCode": { "type": "integer" },
+    "logs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retargeter", "adapter", "pack"],
+      "properties": {
+        "retargeter": { "type": "string", "minLength": 1 },
+        "adapter": { "type": "string", "minLength": 1 },
+        "pack": { "type": "string", "minLength": 1 }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "verifiedFinalFbx": { "type": "string" },
+    "verifiedFinalFbxSha256": { "$ref": "#/$defs/sha256OrEmpty" },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preflightReused", "preflightSeconds", "retargetWorkerSeconds",
+        "adapterSeconds", "packSeconds", "packageInspectSeconds",
+        "totalSeconds"
+      ],
+      "properties": {
+        "preflightReused": { "type": "boolean" },
+        "preflightSeconds": { "$ref": "#/$defs/seconds" },
+        "retargetWorkerSeconds": { "$ref": "#/$defs/seconds" },
+        "adapterSeconds": { "$ref": "#/$defs/seconds" },
+        "packSeconds": { "$ref": "#/$defs/seconds" },
+        "packageInspectSeconds": { "$ref": "#/$defs/seconds" },
+        "totalSeconds": { "$ref": "#/$defs/seconds" }
+      }
+    }
+  }
+}

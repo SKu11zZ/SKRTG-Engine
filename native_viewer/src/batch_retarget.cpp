@@ -39,6 +39,8 @@ constexpr const char* ProfileCatalogRequestSchema =
 constexpr const char* LegacyStatusSchema =
     "skrtg.native_viewer.batch_retarget_status.v1";
 constexpr const char* ProfileCatalogStatusSchema =
+    "skrtg.native_viewer.batch_retarget_status.v3";
+constexpr const char* ProfileCatalogStatusSchemaV2 =
     "skrtg.native_viewer.batch_retarget_status.v2";
 constexpr const char* ExternalDefinitionKind = "external_foundation_v1";
 constexpr const char* UEIKJsonDefinitionKind = "ue_ik_json_v1";
@@ -585,6 +587,23 @@ nlohmann::json JobJson(
         Json["restFbxImportMode"] =
             RetargetBridgeRestFbxImportModeName(
                 Job.RestFbxImportMode);
+        Json["timings"] = {
+            {"planningPreflightSeconds",
+             Job.PlanningPreflightSeconds},
+            {"bridgePreflightReused",
+             Job.BridgeTimings.PreflightReused},
+            {"bridgePreflightSeconds",
+             Job.BridgeTimings.PreflightSeconds},
+            {"retargetWorkerSeconds",
+             Job.BridgeTimings.RetargetWorkerSeconds},
+            {"adapterSeconds", Job.BridgeTimings.AdapterSeconds},
+            {"packSeconds", Job.BridgeTimings.PackSeconds},
+            {"packageInspectSeconds",
+             Job.BridgeTimings.PackageInspectSeconds},
+            {"verifiedExportCopySeconds",
+             Job.VerifiedExportCopySeconds},
+            {"bridgeTotalSeconds",
+             Job.BridgeTimings.TotalSeconds}};
     }
     return Json;
 }
@@ -666,6 +685,28 @@ BatchRetargetJob ReadJobJson(
         Json.value("finalFbxSha256", std::string());
     Result.State = ParseJobState(Json.at("state").get<std::string>());
     Result.DurationSeconds = Json.at("durationSeconds").get<double>();
+    if (RequireProfileCatalogFields && Json.contains("timings"))
+    {
+        const nlohmann::json& Timings = Json.at("timings");
+        Result.PlanningPreflightSeconds = Timings.value(
+            "planningPreflightSeconds", 0.0);
+        Result.BridgeTimings.PreflightReused = Timings.value(
+            "bridgePreflightReused", false);
+        Result.BridgeTimings.PreflightSeconds = Timings.value(
+            "bridgePreflightSeconds", 0.0);
+        Result.BridgeTimings.RetargetWorkerSeconds = Timings.value(
+            "retargetWorkerSeconds", 0.0);
+        Result.BridgeTimings.AdapterSeconds = Timings.value(
+            "adapterSeconds", 0.0);
+        Result.BridgeTimings.PackSeconds = Timings.value(
+            "packSeconds", 0.0);
+        Result.BridgeTimings.PackageInspectSeconds = Timings.value(
+            "packageInspectSeconds", 0.0);
+        Result.VerifiedExportCopySeconds = Timings.value(
+            "verifiedExportCopySeconds", 0.0);
+        Result.BridgeTimings.TotalSeconds = Timings.value(
+            "bridgeTotalSeconds", 0.0);
+    }
     Result.Errors = Json.at("errors").get<std::vector<std::string>>();
     return Result;
 }
@@ -1141,16 +1182,28 @@ BatchRetargetPlan BuildBatchRetargetPlan(
     }
     if (!Result.Errors.empty()) return Result;
 
-    const std::size_t PreflightCount = ProfileCatalogBatch
-        ? Result.Jobs.size()
-        : std::size_t{1};
-    for (std::size_t Index = 0;
-         Index < PreflightCount; ++Index)
+    std::vector<RetargetBridgeRequest> BridgeRequests;
+    BridgeRequests.reserve(Result.Jobs.size());
+    for (const BatchRetargetJob& Job : Result.Jobs)
+        BridgeRequests.push_back(
+            BuildBridgeRequestForJob(Request, Job));
+    // Evidence is shared only while planning this immutable selection; each
+    // returned preflight remains bound to its exact job and output path.
+    Result.Preflights =
+        PreflightRetargetBridges(BridgeRequests);
+    if (Result.Preflights.size() != Result.Jobs.size())
     {
-        const RetargetBridgePreflight Preflight =
-            PreflightRetargetBridge(
-                BuildBridgeRequestForJob(
-                    Request, Result.Jobs[Index]));
+        Result.Errors.push_back(
+            "batch preflight did not return one result per job");
+        return Result;
+    }
+    for (std::size_t Index = 0;
+         Index < Result.Preflights.size(); ++Index)
+    {
+        const RetargetBridgePreflight& Preflight =
+            Result.Preflights[Index];
+        Result.Jobs[Index].PlanningPreflightSeconds =
+            Preflight.DurationSeconds;
         for (const std::string& Error : Preflight.Errors)
         {
             Result.Errors.push_back(
@@ -1363,6 +1416,10 @@ bool WriteBatchRetargetStatus(
             ProfileCatalogBindingJson(Status.AssetBinding);
         Json["candidateRouteSelected"] = false;
         Json["candidateRouteAdopted"] = false;
+        Json["timings"] = {
+            {"planningSeconds", Status.PlanningDurationSeconds},
+            {"executionSeconds", Status.DurationSeconds},
+            {"wallSeconds", Status.WallDurationSeconds}};
     }
     return WriteTextAtomic(OutputJson, Json.dump(2) + "\n", OutError);
 }
@@ -1385,6 +1442,7 @@ bool ReadBatchRetargetStatus(
         const std::string Schema =
             Json.at("schema").get<std::string>();
         if (Schema != LegacyStatusSchema &&
+            Schema != ProfileCatalogStatusSchemaV2 &&
             Schema != ProfileCatalogStatusSchema)
         {
             OutError = "unsupported batch retarget status schema";
@@ -1392,7 +1450,10 @@ bool ReadBatchRetargetStatus(
         }
         const nlohmann::json& Execution =
             Json.at("executionPolicy");
-        if (Schema == ProfileCatalogStatusSchema &&
+        const bool ProfileStatus =
+            Schema == ProfileCatalogStatusSchemaV2 ||
+            Schema == ProfileCatalogStatusSchema;
+        if (ProfileStatus &&
             (Execution.at("maximumConcurrentJobs")
                     .get<std::size_t>() != 1 ||
              Execution.at("mode").get<std::string>() !=
@@ -1441,7 +1502,7 @@ bool ReadBatchRetargetStatus(
             Json.at("enableSpinePelvisFollow").get<bool>();
         OutStatus.EnableSourceMotionFootLock =
             Json.at("enableSourceMotionFootLock").get<bool>();
-        if (Schema == ProfileCatalogStatusSchema)
+        if (ProfileStatus)
         {
             if (!OutStatus.AnimationDirectory.empty() ||
                 OutStatus.Recursive)
@@ -1462,13 +1523,21 @@ bool ReadBatchRetargetStatus(
             OutStatus.AssetBinding =
                 ReadProfileCatalogBindingJson(
                     Json.at("assetSelection"));
+            if (Json.contains("timings"))
+            {
+                const nlohmann::json& Timings = Json.at("timings");
+                OutStatus.PlanningDurationSeconds = Timings.value(
+                    "planningSeconds", 0.0);
+                OutStatus.WallDurationSeconds = Timings.value(
+                    "wallSeconds", OutStatus.DurationSeconds);
+            }
         }
         std::set<std::string> ProfileAnimationIds;
         for (const nlohmann::json& Job : Json.at("jobs"))
         {
             BatchRetargetJob Parsed = ReadJobJson(
-                Job, Schema == ProfileCatalogStatusSchema);
-            if (Schema == ProfileCatalogStatusSchema)
+                Job, ProfileStatus);
+            if (ProfileStatus)
             {
                 if (Parsed.SourceAnimationId != Parsed.ClipId ||
                     Parsed.SourceAnimationSkeletonId !=
@@ -1488,7 +1557,7 @@ bool ReadBatchRetargetStatus(
             }
             OutStatus.Jobs.push_back(std::move(Parsed));
         }
-        if (Schema == ProfileCatalogStatusSchema &&
+        if (ProfileStatus &&
             OutStatus.Jobs.size() != OutStatus.TotalJobs)
         {
             throw std::runtime_error(
@@ -1538,9 +1607,12 @@ std::vector<BatchReviewAnimation> BuildBatchReviewAnimationList(
 BatchRetargetRunResult RunBatchRetarget(
     const BatchRetargetRequest& Request)
 {
+    const auto WallStart = std::chrono::steady_clock::now();
     BatchRetargetRunResult Result;
     Result.StatusJson = Request.OutputDirectory / "batch_status.json";
     const BatchRetargetPlan Plan = BuildBatchRetargetPlan(Request);
+    const double PlanningSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - WallStart).count();
     if (!Plan.Success)
     {
         Result.Errors = Plan.Errors;
@@ -1572,6 +1644,8 @@ BatchRetargetRunResult RunBatchRetarget(
     Status.EnableSourceMotionFootLock = Request.EnableSourceMotionFootLock;
     Status.AssetBinding = Request.AssetBinding;
     Status.Jobs = Plan.Jobs;
+    Status.PlanningDurationSeconds = PlanningSeconds;
+    Status.WallDurationSeconds = PlanningSeconds;
     Recount(Status);
     const auto BatchStart = std::chrono::steady_clock::now();
     std::string StatusError;
@@ -1602,7 +1676,10 @@ BatchRetargetRunResult RunBatchRetarget(
         const RetargetBridgeRequest Single =
             BuildBridgeRequestForJob(Request, Job);
 
-        const RetargetBridgeRunResult Bridge = RunRetargetBridge(Single);
+        const RetargetBridgeRunResult Bridge =
+            RunRetargetBridgePreflighted(
+                Single, Plan.Preflights[Index]);
+        Job.BridgeTimings = Bridge.Timings;
         Job.SourceAnimationSha256 = Bridge.SourceAnimationSha256;
         if (!Bridge.Success)
         {
@@ -1610,22 +1687,42 @@ BatchRetargetRunResult RunBatchRetarget(
         }
         else
         {
-            const ReviewExportResult Export = FindVerifiedReviewExport(
-                Bridge.ReviewPackage, Job.ClipId, "final");
-            if (!Export.Success)
+            std::filesystem::path VerifiedFinalFbx =
+                Bridge.VerifiedFinalFbx;
+            std::string VerifiedFinalSha256 =
+                Bridge.VerifiedFinalFbxSha256;
+            if (VerifiedFinalFbx.empty() ||
+                VerifiedFinalSha256.empty())
             {
-                Job.Errors = Export.Errors;
+                const ReviewExportResult Export =
+                    FindVerifiedReviewExport(
+                        Bridge.ReviewPackage, Job.ClipId, "final");
+                if (!Export.Success)
+                {
+                    Job.Errors = Export.Errors;
+                }
+                else
+                {
+                    VerifiedFinalFbx = Export.SourceFbx;
+                    VerifiedFinalSha256 = Export.ExpectedSha256;
+                }
             }
-            else
+            if (Job.Errors.empty())
             {
+                const auto CopyStarted =
+                    std::chrono::steady_clock::now();
                 const VerifiedExportCopyResult Copy = CopyVerifiedExport({
-                    Export.SourceFbx,
+                    VerifiedFinalFbx,
                     Job.FinalFbx,
                     Bridge.ReviewPackage,
-                    Export.ExpectedSha256,
+                    VerifiedFinalSha256,
                     false});
+                Job.VerifiedExportCopySeconds =
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - CopyStarted)
+                        .count();
                 if (!Copy.Success) Job.Errors = Copy.Errors;
-                else Job.FinalFbxSha256 = Export.ExpectedSha256;
+                else Job.FinalFbxSha256 = VerifiedFinalSha256;
             }
         }
         Job.DurationSeconds = std::chrono::duration<double>(
@@ -1637,6 +1734,8 @@ BatchRetargetRunResult RunBatchRetarget(
         Recount(Status);
         Status.DurationSeconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - BatchStart).count();
+        Status.WallDurationSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - WallStart).count();
         if (!WriteBatchRetargetStatus(
                 Status, Result.StatusJson, StatusError))
         {
@@ -1653,6 +1752,8 @@ BatchRetargetRunResult RunBatchRetarget(
     Status.Success = Status.Complete && Status.FailedJobs == 0;
     Status.DurationSeconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - BatchStart).count();
+    Status.WallDurationSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - WallStart).count();
     Status.Errors.insert(
         Status.Errors.end(), Result.Errors.begin(), Result.Errors.end());
     if (!WriteBatchRetargetStatus(Status, Result.StatusJson, StatusError))

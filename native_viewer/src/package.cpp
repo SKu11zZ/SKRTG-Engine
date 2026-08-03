@@ -4,6 +4,8 @@
 #include "package_inventory.h"
 #include "skrtg/viewer/skrv/sha256.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -11,6 +13,7 @@
 #include <cctype>
 #include <exception>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <system_error>
@@ -281,6 +284,39 @@ PackageWriteResult WriteFailure(
     Result.Errors.push_back(Error);
     return Result;
 }
+
+std::string UpperAscii(std::string Value)
+{
+    std::transform(
+        Value.begin(), Value.end(), Value.begin(),
+        [](const unsigned char Character)
+        {
+            return static_cast<char>(std::toupper(Character));
+        });
+    return Value;
+}
+
+EntryRole RoleForPath(const std::filesystem::path& Relative)
+{
+    const std::string Generic = Utf8Generic(Relative);
+    if (Generic == ManifestFileName) return EntryRole::Manifest;
+    if (Generic.rfind("blobs/", 0) == 0) return EntryRole::Blob;
+    if (Generic.rfind("exports/", 0) == 0) return EntryRole::Export;
+    return EntryRole::Auxiliary;
+}
+
+void RestoreOrRemoveStage(
+    const std::filesystem::path& Stage,
+    const std::filesystem::path& Payload)
+{
+    std::error_code Error;
+    if (!std::filesystem::exists(Payload, Error) && !Error)
+    {
+        std::filesystem::rename(Stage, Payload, Error);
+        if (!Error) return;
+    }
+    RemovePartial(Stage);
+}
 } // namespace
 
 const char* EntryRoleName(const EntryRole Role)
@@ -308,6 +344,7 @@ bool ParseEntryRole(const std::string& Value, EntryRole& OutRole)
 PackageWriteResult WriteDirectoryPackage(
     const PackageWriteRequest& Request)
 {
+    const auto Started = std::chrono::steady_clock::now();
     std::error_code ErrorCode;
     const std::filesystem::path Output =
         std::filesystem::absolute(Request.OutputDirectory, ErrorCode)
@@ -416,7 +453,12 @@ PackageWriteResult WriteDirectoryPackage(
     }
     Integrity.close();
 
+    const auto InspectStarted = std::chrono::steady_clock::now();
     const PackageInspectResult Inspection = InspectDirectoryPackage(Stage);
+    Result.InspectionSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - InspectStarted).count();
+    Result.PreparationSeconds = std::chrono::duration<double>(
+        InspectStarted - Started).count();
     if (!Inspection.Success)
     {
         const std::string Error = Inspection.Errors.empty()
@@ -432,6 +474,218 @@ PackageWriteResult WriteDirectoryPackage(
         RemovePartial(Stage);
         return WriteFailure(Output, "failed to atomically commit package directory");
     }
+    Result.Success = true;
+    return Result;
+}
+
+PackageWriteResult SealDirectoryPackage(
+    const std::filesystem::path& PayloadDirectory,
+    const std::filesystem::path& OutputDirectory)
+{
+    const auto Started = std::chrono::steady_clock::now();
+    std::error_code ErrorCode;
+    const std::filesystem::path Payload =
+        std::filesystem::absolute(PayloadDirectory, ErrorCode)
+            .lexically_normal();
+    if (PayloadDirectory.empty() || ErrorCode)
+        return WriteFailure({}, "payload path cannot be resolved");
+    const std::filesystem::path Output =
+        std::filesystem::absolute(OutputDirectory, ErrorCode)
+            .lexically_normal();
+    if (OutputDirectory.empty() || ErrorCode || Payload == Output)
+        return WriteFailure(Output, "output path cannot be resolved");
+    if (!std::filesystem::is_directory(Payload, ErrorCode) || ErrorCode)
+        return WriteFailure(Output, "payload directory does not exist");
+    if (std::filesystem::exists(Output, ErrorCode) || ErrorCode)
+        return WriteFailure(
+            Output, "output package already exists or cannot be queried");
+    if (Payload.parent_path() != Output.parent_path())
+    {
+        return WriteFailure(
+            Output,
+            "sealed payload and output package must share one parent directory");
+    }
+
+    const auto Nonce = std::chrono::steady_clock::now()
+        .time_since_epoch().count();
+    const unsigned long long ShortNonce =
+        static_cast<unsigned long long>(Nonce) & 0xFFFFFFFFULL;
+    const std::filesystem::path Stage = Output.parent_path() /
+        (".seal-" + std::to_string(ShortNonce));
+    if (std::filesystem::exists(Stage, ErrorCode) || ErrorCode)
+        return WriteFailure(Output, "package staging path is unavailable");
+    std::filesystem::rename(Payload, Stage, ErrorCode);
+    if (ErrorCode)
+        return WriteFailure(Output, "failed to isolate payload for sealing");
+
+    auto Fail = [&](const std::string& Error)
+    {
+        RestoreOrRemoveStage(Stage, Payload);
+        return WriteFailure(Output, Error);
+    };
+
+    std::vector<PackageSourceItem> Items;
+    std::set<std::string> Keys;
+    int ManifestCount = 0;
+    std::filesystem::recursive_directory_iterator Iterator(
+        Stage, std::filesystem::directory_options::none, ErrorCode);
+    const std::filesystem::recursive_directory_iterator End;
+    if (ErrorCode) return Fail("failed to begin payload inventory");
+    while (Iterator != End)
+    {
+        const std::filesystem::directory_entry DirectoryEntry = *Iterator;
+        const std::filesystem::file_status Status =
+            DirectoryEntry.symlink_status(ErrorCode);
+        if (ErrorCode || std::filesystem::is_symlink(Status))
+            return Fail("payload contains a symlink or unreadable entry");
+        if (!std::filesystem::is_regular_file(Status) &&
+            !std::filesystem::is_directory(Status))
+        {
+            return Fail("payload contains a special filesystem entry");
+        }
+        if (std::filesystem::is_regular_file(Status))
+        {
+            if (Items.size() >= MaximumIndexedEntries)
+                return Fail("payload exceeds the indexed-entry limit");
+            const std::filesystem::path Relative =
+                std::filesystem::relative(
+                    DirectoryEntry.path(), Stage, ErrorCode);
+            std::string PathError;
+            if (ErrorCode || !IsSafeRelativePath(Relative, PathError))
+            {
+                return Fail(PathError.empty()
+                    ? "failed to inventory payload path" : PathError);
+            }
+            const EntryRole Role = RoleForPath(Relative);
+            if (!RoleMatchesPath(Role, Relative, PathError))
+                return Fail(PathError);
+            const std::string Key = PortableKey(Relative);
+            if (Key == LowerAscii(IntegrityFileName))
+                return Fail("payload may not contain integrity.tsv");
+            if (!Keys.insert(Key).second)
+                return Fail("payload contains a portable-path collision");
+            if (Role == EntryRole::Manifest) ++ManifestCount;
+            Items.push_back({Role, Relative, DirectoryEntry.path()});
+        }
+        Iterator.increment(ErrorCode);
+        if (ErrorCode) return Fail("failed while inventorying payload");
+    }
+    if (Items.empty() || ManifestCount != 1)
+        return Fail("payload requires exactly one manifest.json");
+
+    std::string ManifestText;
+    std::string ReadError;
+    if (!ReadWholeFile(Stage / ManifestFileName, ManifestText, ReadError))
+        return Fail(ReadError);
+    std::map<std::string, std::string> ExportHashes;
+    try
+    {
+        const nlohmann::json Manifest =
+            nlohmann::json::parse(ManifestText);
+        for (const nlohmann::json& Export :
+             Manifest.at("verifiedExports"))
+        {
+            const std::filesystem::path Relative = PathFromUtf8(
+                Export.at("path").get<std::string>());
+            const std::string Hash = UpperAscii(
+                Export.at("sha256").get<std::string>());
+            std::string PathError;
+            if (!IsSafeRelativePath(Relative, PathError) ||
+                RoleForPath(Relative) != EntryRole::Export ||
+                !IsSha256Hex(Hash) ||
+                !ExportHashes.emplace(
+                    PortableKey(Relative), Hash).second)
+            {
+                return Fail(
+                    "manifest verified export inventory is invalid");
+            }
+        }
+    }
+    catch (const std::exception&)
+    {
+        return Fail("manifest verified export inventory is invalid");
+    }
+
+    PackageWriteResult Result;
+    Result.OutputDirectory = Output;
+    for (const PackageSourceItem& Item : Items)
+    {
+        IntegrityEntry Entry;
+        Entry.Role = Item.Role;
+        Entry.RelativePath = Item.RelativePath;
+        Entry.ByteCount =
+            std::filesystem::file_size(Item.SourcePath, ErrorCode);
+        if (ErrorCode) return Fail("failed to size package payload");
+        std::string HashError;
+        if (Item.Role == EntryRole::Blob)
+        {
+            const std::string Extension =
+                LowerAscii(Item.RelativePath.extension().string());
+            Entry.Sha256 = UpperAscii(
+                Item.RelativePath.stem().string());
+            if (Extension != ".bin" || !IsSha256Hex(Entry.Sha256))
+                return Fail("blob path does not encode its SHA-256");
+        }
+        else if (Item.Role == EntryRole::Export)
+        {
+            const auto Found = ExportHashes.find(
+                PortableKey(Item.RelativePath));
+            if (Found == ExportHashes.end())
+                return Fail("export is absent from the verified manifest");
+            Entry.Sha256 = Found->second;
+        }
+        else if (!Sha256File(
+                     Item.SourcePath, Entry.Sha256, HashError))
+        {
+            return Fail(HashError.empty()
+                ? "failed to hash package payload" : HashError);
+        }
+        Result.Entries.push_back(std::move(Entry));
+    }
+    std::sort(
+        Result.Entries.begin(), Result.Entries.end(),
+        [](const IntegrityEntry& Left, const IntegrityEntry& Right)
+        {
+            return PortableKey(Left.RelativePath) <
+                PortableKey(Right.RelativePath);
+        });
+
+    const std::filesystem::path IntegrityPath =
+        Stage / IntegrityFileName;
+    std::ofstream Integrity(IntegrityPath, std::ios::binary);
+    Integrity << IntegrityMagic << '\n' << IntegrityHeader << '\n';
+    for (const IntegrityEntry& Entry : Result.Entries)
+    {
+        Integrity << EntryRoleName(Entry.Role) << '\t'
+                  << Utf8Generic(Entry.RelativePath) << '\t'
+                  << Entry.ByteCount << '\t'
+                  << Entry.Sha256 << '\n';
+    }
+    Integrity.flush();
+    if (!Integrity)
+    {
+        Integrity.close();
+        return Fail("failed to write integrity.tsv");
+    }
+    Integrity.close();
+
+    const auto InspectStarted = std::chrono::steady_clock::now();
+    const PackageInspectResult Inspection =
+        InspectDirectoryPackage(Stage);
+    Result.InspectionSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - InspectStarted).count();
+    Result.PreparationSeconds = std::chrono::duration<double>(
+        InspectStarted - Started).count();
+    if (!Inspection.Success)
+    {
+        return Fail(Inspection.Errors.empty()
+            ? "sealed package verification failed"
+            : Inspection.Errors.front());
+    }
+    Result.Entries = Inspection.Entries;
+    std::filesystem::rename(Stage, Output, ErrorCode);
+    if (ErrorCode)
+        return Fail("failed to atomically commit sealed package directory");
     Result.Success = true;
     return Result;
 }
