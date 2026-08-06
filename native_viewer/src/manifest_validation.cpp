@@ -1051,6 +1051,7 @@ private:
                 !ValidatePoseDescriptor(Clip, "finalTrs", TargetElements, Path))
                 return false;
             bool Flag = false;
+            bool OperationStackEnabled = false;
             std::string Status;
             if (!BoolMember(Clip, "sourceMeshFallbackUsed", Flag, Path) ||
                 !StringMember(Clip, "limbIkStatus", Status, Path) ||
@@ -1062,6 +1063,25 @@ private:
                     Clip, "sourceMotionFootLockNoGroundOrContactSemanticsUsed",
                     Flag, Path))
                 return false;
+            if (HasOperationStackMetadata_)
+            {
+                if (!BoolMember(
+                        Clip, "operationStackEnabled",
+                        OperationStackEnabled, Path) ||
+                    OperationStackEnabled !=
+                        OperationStackCandidateEnabled_)
+                {
+                    return Fail(
+                        Path + ".operationStackEnabled",
+                        "must match the snapshot Operation System candidate state");
+                }
+            }
+            else if (Clip.contains("operationStackEnabled"))
+            {
+                return Fail(
+                    Path + ".operationStackEnabled",
+                    "requires complete snapshot Operation System metadata");
+            }
             if (IsUEIKJsonCandidate_ && Status != "committed")
             {
                 return Fail(
@@ -1107,6 +1127,39 @@ private:
                 "non-frozen");
         }
         IsUEIKJsonCandidate_ = IsUEIKJsonCandidate;
+        const bool HasAnyOperationStackMetadata =
+            Snapshot.contains("operationStackCandidateEnabled") ||
+            Snapshot.contains("operationStackCandidateSelected") ||
+            Snapshot.contains("operationStackCandidateAdopted");
+        if (HasAnyOperationStackMetadata)
+        {
+            bool Selected = false;
+            bool Adopted = false;
+            if (!Snapshot.contains("operationStackCandidateEnabled") ||
+                !Snapshot.contains("operationStackCandidateSelected") ||
+                !Snapshot.contains("operationStackCandidateAdopted") ||
+                !BoolMember(
+                    Snapshot, "operationStackCandidateEnabled",
+                    OperationStackCandidateEnabled_, "$.snapshot") ||
+                !BoolMember(
+                    Snapshot, "operationStackCandidateSelected",
+                    Selected, "$.snapshot") ||
+                !BoolMember(
+                    Snapshot, "operationStackCandidateAdopted",
+                    Adopted, "$.snapshot"))
+            {
+                return Fail(
+                    "$.snapshot",
+                    "Operation System candidate metadata must be complete booleans");
+            }
+            if (Selected || Adopted)
+            {
+                return Fail(
+                    "$.snapshot",
+                    "Operation System v2 is candidate-only and may not be selected or adopted");
+            }
+            HasOperationStackMetadata_ = true;
+        }
         for (const char* Key : {
                  "selected", "adopted", "stageComplete", "route_selected",
                  "route_adopted", "stage_complete",
@@ -1409,6 +1462,8 @@ private:
     std::set<std::string> ReferencedExports_;
     std::map<std::string, ClipInfo> ClipInfos_;
     bool IsUEIKJsonCandidate_ = false;
+    bool HasOperationStackMetadata_ = false;
+    bool OperationStackCandidateEnabled_ = false;
     std::uint64_t LimbIkGoalCount_ = 0;
     std::uint64_t FingerIkGoalCount_ = 0;
 };

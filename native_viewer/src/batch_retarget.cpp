@@ -36,10 +36,14 @@ constexpr const char* UEIKJsonRequestSchema =
     "skrtg.native_viewer.batch_retarget_request.v2";
 constexpr const char* ProfileCatalogRequestSchema =
     "skrtg.native_viewer.batch_retarget_request.v3";
+constexpr const char* ProfileCatalogOperationRequestSchema =
+    "skrtg.native_viewer.batch_retarget_request.v4";
 constexpr const char* LegacyStatusSchema =
     "skrtg.native_viewer.batch_retarget_status.v1";
 constexpr const char* ProfileCatalogStatusSchema =
     "skrtg.native_viewer.batch_retarget_status.v3";
+constexpr const char* ProfileCatalogOperationStatusSchema =
+    "skrtg.native_viewer.batch_retarget_status.v4";
 constexpr const char* ProfileCatalogStatusSchemaV2 =
     "skrtg.native_viewer.batch_retarget_status.v2";
 constexpr const char* ExternalDefinitionKind = "external_foundation_v1";
@@ -755,6 +759,9 @@ RetargetBridgeRequest BuildBridgeRequestForJob(
         Request.EnableSpinePelvisFollow;
     Result.EnableSourceMotionFootLock =
         Request.EnableSourceMotionFootLock;
+    Result.OperationStackJson = Request.OperationStackJson;
+    Result.OperationStackJsonExpectedSha256 =
+        Request.OperationStackJsonExpectedSha256;
     if (Request.AssetBinding.Required)
     {
         Result.SourceAnimationGoldenJson =
@@ -980,6 +987,19 @@ BatchRetargetPlan BuildBatchRetargetPlan(
                     " must be a readable exported .json file");
             }
         }
+    }
+    if (!Request.OperationStackJson.empty() &&
+        (!UEIKJsonRoute || !ProfileCatalogBatch))
+    {
+        Result.Errors.push_back(
+            "Operation System v2 batch execution requires the exact "
+            "profile/catalog-backed UE IK JSON route");
+    }
+    if (!Request.OperationStackJsonExpectedSha256.empty() &&
+        Request.OperationStackJson.empty())
+    {
+        Result.Errors.push_back(
+            "Operation System v2 expected SHA-256 requires a config JSON");
     }
     if (ProfileCatalogBatch)
     {
@@ -1222,8 +1242,10 @@ BatchRetargetPlan BuildBatchRetargetPlan(
         }
     }
     Result.Warnings.push_back(
-        "low-memory streaming policy is fixed at one active animation; "
-        "each Retargeter worker exits before the next job starts");
+        "low-memory streaming remains fixed at one active animation; "
+        "immutable hashes, profiles, catalog records, and the optional "
+        "Operation System v2 config are cached during whole-batch preflight, "
+        "while each Retargeter worker still re-hashes solver inputs");
     Result.Success = Result.Errors.empty();
     return Result;
 }
@@ -1237,12 +1259,21 @@ bool WriteBatchRetargetRequest(
         Request.SourceCharacter.DefinitionKind == UEIKJsonDefinitionKind;
     const bool ProfileCatalogBatch =
         Request.AssetBinding.Required;
+    if (!Request.OperationStackJson.empty() && !ProfileCatalogBatch)
+    {
+        OutError =
+            "Operation System v2 batch requests require an exact "
+            "profile/catalog asset selection";
+        return false;
+    }
     nlohmann::json Json = {
-        {"schema", ProfileCatalogBatch
+        {"schema", !Request.OperationStackJson.empty()
+            ? ProfileCatalogOperationRequestSchema
+            : (ProfileCatalogBatch
             ? ProfileCatalogRequestSchema
             : (UEIKJson
                 ? UEIKJsonRequestSchema
-                : ExternalRequestSchema)},
+                : ExternalRequestSchema))},
         {"sourceCharacter", CharacterJson(Request.SourceCharacter)},
         {"targetCharacter", CharacterJson(Request.TargetCharacter)},
         {"animationDirectory", PathToUtf8(Request.AnimationDirectory)},
@@ -1258,6 +1289,16 @@ bool WriteBatchRetargetRequest(
             {"mode", "streaming_one_animation_per_worker"},
             {"continueAfterJobFailure", true}}},
         {"tools", ToolsJson(Request.Tools)}};
+    if (!Request.OperationStackJson.empty())
+    {
+        Json["operationStack"] = {
+            {"configJson", PathToUtf8(Request.OperationStackJson)},
+            {"expectedSha256",
+             Request.OperationStackJsonExpectedSha256},
+            {"candidate", true},
+            {"selected", false},
+            {"adopted", false}};
+    }
     if (ProfileCatalogBatch)
     {
         Json["assetSelection"] =
@@ -1293,7 +1334,8 @@ bool ReadBatchRetargetRequest(
             Json.at("schema").get<std::string>();
         if (Schema != ExternalRequestSchema &&
             Schema != UEIKJsonRequestSchema &&
-            Schema != ProfileCatalogRequestSchema)
+            Schema != ProfileCatalogRequestSchema &&
+            Schema != ProfileCatalogOperationRequestSchema)
         {
             OutError = "unsupported batch retarget request schema";
             return false;
@@ -1325,7 +1367,10 @@ bool ReadBatchRetargetRequest(
         OutRequest.EnableSourceMotionFootLock =
             Json.at("enableSourceMotionFootLock").get<bool>();
         OutRequest.Tools = ReadToolsJson(Json.at("tools"));
-        if (Schema == ProfileCatalogRequestSchema)
+        const bool ProfileCatalogRequest =
+            Schema == ProfileCatalogRequestSchema ||
+            Schema == ProfileCatalogOperationRequestSchema;
+        if (ProfileCatalogRequest)
         {
             OutRequest.AssetBinding =
                 ReadProfileCatalogBindingJson(
@@ -1349,10 +1394,29 @@ bool ReadBatchRetargetRequest(
                 OutRequest.Recursive)
             {
                 OutError =
-                    "profile-backed batch v3 must not scan an "
+                    "profile-backed batch must not scan an "
                     "animation directory";
                 return false;
             }
+        }
+        if (Schema == ProfileCatalogOperationRequestSchema)
+        {
+            const nlohmann::json& OperationStack =
+                Json.at("operationStack");
+            if (!OperationStack.at("candidate").get<bool>() ||
+                OperationStack.at("selected").get<bool>() ||
+                OperationStack.at("adopted").get<bool>())
+            {
+                OutError =
+                    "Operation System v2 batch config must remain "
+                    "candidate=true, selected=false, adopted=false";
+                return false;
+            }
+            OutRequest.OperationStackJson = PathFromUtf8(
+                OperationStack.at("configJson").get<std::string>());
+            OutRequest.OperationStackJsonExpectedSha256 =
+                OperationStack.at("expectedSha256")
+                    .get<std::string>();
         }
         return true;
     }
@@ -1376,9 +1440,11 @@ bool WriteBatchRetargetStatus(
             JobJson(Job, Status.AssetBinding.Required));
     }
     nlohmann::json Json = {
-        {"schema", Status.AssetBinding.Required
+        {"schema", !Status.OperationStackJson.empty()
+            ? ProfileCatalogOperationStatusSchema
+            : (Status.AssetBinding.Required
             ? ProfileCatalogStatusSchema
-            : LegacyStatusSchema},
+            : LegacyStatusSchema)},
         {"running", Status.Running},
         {"complete", Status.Complete},
         {"success", Status.Success},
@@ -1410,6 +1476,15 @@ bool WriteBatchRetargetStatus(
         {"xmlDefinitionParsingEnabled", false},
         {"jobs", std::move(Jobs)},
         {"errors", Status.Errors}};
+    if (!Status.OperationStackJson.empty())
+    {
+        Json["operationStack"] = {
+            {"configJson", PathToUtf8(Status.OperationStackJson)},
+            {"configSha256", Status.OperationStackJsonSha256},
+            {"candidate", true},
+            {"selected", false},
+            {"adopted", false}};
+    }
     if (Status.AssetBinding.Required)
     {
         Json["assetSelection"] =
@@ -1443,7 +1518,8 @@ bool ReadBatchRetargetStatus(
             Json.at("schema").get<std::string>();
         if (Schema != LegacyStatusSchema &&
             Schema != ProfileCatalogStatusSchemaV2 &&
-            Schema != ProfileCatalogStatusSchema)
+            Schema != ProfileCatalogStatusSchema &&
+            Schema != ProfileCatalogOperationStatusSchema)
         {
             OutError = "unsupported batch retarget status schema";
             return false;
@@ -1452,7 +1528,8 @@ bool ReadBatchRetargetStatus(
             Json.at("executionPolicy");
         const bool ProfileStatus =
             Schema == ProfileCatalogStatusSchemaV2 ||
-            Schema == ProfileCatalogStatusSchema;
+            Schema == ProfileCatalogStatusSchema ||
+            Schema == ProfileCatalogOperationStatusSchema;
         if (ProfileStatus &&
             (Execution.at("maximumConcurrentJobs")
                     .get<std::size_t>() != 1 ||
@@ -1531,6 +1608,24 @@ bool ReadBatchRetargetStatus(
                 OutStatus.WallDurationSeconds = Timings.value(
                     "wallSeconds", OutStatus.DurationSeconds);
             }
+        }
+        if (Schema == ProfileCatalogOperationStatusSchema)
+        {
+            const nlohmann::json& OperationStack =
+                Json.at("operationStack");
+            if (!OperationStack.at("candidate").get<bool>() ||
+                OperationStack.at("selected").get<bool>() ||
+                OperationStack.at("adopted").get<bool>())
+            {
+                OutError =
+                    "Operation System v2 batch status may not select "
+                    "or adopt the candidate stack";
+                return false;
+            }
+            OutStatus.OperationStackJson = PathFromUtf8(
+                OperationStack.at("configJson").get<std::string>());
+            OutStatus.OperationStackJsonSha256 =
+                OperationStack.at("configSha256").get<std::string>();
         }
         std::set<std::string> ProfileAnimationIds;
         for (const nlohmann::json& Job : Json.at("jobs"))
@@ -1638,6 +1733,12 @@ BatchRetargetRunResult RunBatchRetarget(
     Status.TargetCharacter = Request.TargetCharacter;
     Status.AnimationDirectory = Request.AnimationDirectory;
     Status.OutputDirectory = Request.OutputDirectory;
+    Status.OperationStackJson = Request.OperationStackJson;
+    if (!Plan.Preflights.empty())
+    {
+        Status.OperationStackJsonSha256 =
+            Plan.Preflights.front().OperationStackJsonSha256;
+    }
     Status.Recursive = Request.Recursive;
     Status.AnimationStack = Request.AnimationStack;
     Status.EnableSpinePelvisFollow = Request.EnableSpinePelvisFollow;

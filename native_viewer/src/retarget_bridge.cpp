@@ -31,6 +31,8 @@ constexpr const char* UEIKJsonCatalogRequestSchema =
     "skrtg.native_viewer.retarget_bridge_request.v4";
 constexpr const char* UEIKJsonProfileRequestSchema =
     "skrtg.native_viewer.retarget_bridge_request.v5";
+constexpr const char* UEIKJsonOperationRequestSchema =
+    "skrtg.native_viewer.retarget_bridge_request.v6";
 constexpr const char* ExternalStatusSchema =
     "skrtg.native_viewer.retarget_bridge_status.v1";
 constexpr const char* UEIKJsonStatusSchema =
@@ -41,6 +43,8 @@ constexpr const char* UEIKJsonCatalogStatusSchema =
     "skrtg.native_viewer.retarget_bridge_status.v4";
 constexpr const char* UEIKJsonProfileStatusSchema =
     "skrtg.native_viewer.retarget_bridge_status.v6";
+constexpr const char* UEIKJsonOperationStatusSchema =
+    "skrtg.native_viewer.retarget_bridge_status.v7";
 
 struct CachedHash
 {
@@ -569,6 +573,18 @@ nlohmann::json RequestJson(const RetargetBridgeRequest& Request)
             }
             Json["assetSelection"] = std::move(Selection);
         }
+        if (!Request.OperationStackJson.empty())
+        {
+            Json["schema"] = UEIKJsonOperationRequestSchema;
+            Json["operationStack"] = {
+                {"configJson",
+                 PathToUtf8(Request.OperationStackJson)},
+                {"expectedSha256",
+                 Request.OperationStackJsonExpectedSha256},
+                {"candidate", true},
+                {"selected", false},
+                {"adopted", false}};
+        }
     }
     return Json;
 }
@@ -589,7 +605,9 @@ nlohmann::json RunStatusJson(
         !Request.AssetBinding.SourceProfilePackage.empty() ||
         !Request.AssetBinding.TargetProfilePackage.empty();
     nlohmann::json Status = {
-        {"schema", Request.AssetBinding.Required
+        {"schema", !Request.OperationStackJson.empty()
+            ? UEIKJsonOperationStatusSchema
+            : (Request.AssetBinding.Required
             ? ((!Request.AssetBinding.SourceProfilePackage.empty() ||
                 !Request.AssetBinding.TargetProfilePackage.empty())
                 ? UEIKJsonProfileStatusSchema
@@ -598,7 +616,7 @@ nlohmann::json RunStatusJson(
             ? UEIKJsonExactStatusSchema
             : (UEIKJson
                 ? UEIKJsonStatusSchema
-                : ExternalStatusSchema))},
+                : ExternalStatusSchema)))},
         {"routeKind", RetargetBridgeRouteKindName(Request.RouteKind)},
         {"assetSelection", {
             {"required", Request.AssetBinding.Required},
@@ -678,6 +696,15 @@ nlohmann::json RunStatusJson(
         }},
         {"errors", Result.Errors}
     };
+    if (!Request.OperationStackJson.empty())
+    {
+        Status["operationStack"] = {
+            {"configJson", PathToUtf8(Request.OperationStackJson)},
+            {"configSha256", Preflight.OperationStackJsonSha256},
+            {"candidate", true},
+            {"selected", false},
+            {"adopted", false}};
+    }
     if (!UsesProfiles)
     {
         Status["assetSelection"].erase(
@@ -1056,6 +1083,10 @@ std::string RequestIdentity(const RetargetBridgeRequest& Request)
          PathIdentity(Request.TargetAlignmentRetargeterJson)},
         {"sourceAnimationGoldenJson",
          PathIdentity(Request.SourceAnimationGoldenJson)},
+        {"operationStackJson",
+         PathIdentity(Request.OperationStackJson)},
+        {"operationStackJsonExpectedSha256",
+         LowerAscii(Request.OperationStackJsonExpectedSha256)},
         {"outputDirectory", PathIdentity(Request.OutputDirectory)},
         {"clipId", Request.ClipId},
         {"clipLabel", Request.ClipLabel},
@@ -1360,6 +1391,28 @@ static RetargetBridgePreflight PreflightRetargetBridgeImpl(
             "exact UE 5.8 source animation import requires an "
             "exported .animgolden.json file");
     }
+    if (!Request.OperationStackJson.empty())
+    {
+        if (!UEIKJson)
+        {
+            Result.Errors.push_back(
+                "Operation System v2 is available only on the UE IK JSON runtime route");
+        }
+        AddFileError(
+            Request.OperationStackJson,
+            "Operation System v2 config JSON", Result.Errors);
+        if (!HasJsonExtension(Request.OperationStackJson))
+        {
+            Result.Errors.push_back(
+                "Operation System v2 config must use a .json extension");
+        }
+        if (!Request.OperationStackJsonExpectedSha256.empty() &&
+            !IsSha256(Request.OperationStackJsonExpectedSha256))
+        {
+            Result.Errors.push_back(
+                "Operation System v2 expected SHA-256 must contain 64 hexadecimal characters");
+        }
+    }
     if (UE58ExportedRestImport && !ExactSourceImport)
     {
         Result.Errors.push_back(
@@ -1486,6 +1539,21 @@ static RetargetBridgePreflight PreflightRetargetBridgeImpl(
                 Result.SourceAnimationGoldenJsonSha256,
                 Result.Errors,
                 "source animation golden JSON", Cache);
+        }
+        if (!Request.OperationStackJson.empty())
+        {
+            ComputeHash(
+                Request.OperationStackJson,
+                Result.OperationStackJsonSha256,
+                Result.Errors,
+                "Operation System v2 config JSON", Cache);
+            if (!Request.OperationStackJsonExpectedSha256.empty())
+            {
+                AddHashBindingError(
+                    Result.OperationStackJsonSha256,
+                    Request.OperationStackJsonExpectedSha256,
+                    "Operation System v2 config JSON", Result.Errors);
+            }
         }
     }
     else
@@ -1854,9 +1922,11 @@ bool ReadRetargetBridgeRequest(
             Schema == UEIKJsonCatalogRequestSchema;
         const bool IsUEIKJsonV5 =
             Schema == UEIKJsonProfileRequestSchema;
+        const bool IsUEIKJsonV6 =
+            Schema == UEIKJsonOperationRequestSchema;
         const bool IsUEIKJson =
             IsUEIKJsonV2 || IsUEIKJsonV3 ||
-            IsUEIKJsonV4 || IsUEIKJsonV5;
+            IsUEIKJsonV4 || IsUEIKJsonV5 || IsUEIKJsonV6;
         if (!IsFrozenV1 && !IsUEIKJson)
         {
             OutError = "unsupported retarget bridge request schema";
@@ -1908,7 +1978,8 @@ bool ReadRetargetBridgeRequest(
                 UEIKJson.at("targetAlignmentRetargeterJson")
                     .get<std::string>());
         }
-        if (IsUEIKJsonV3 || IsUEIKJsonV4 || IsUEIKJsonV5)
+        if (IsUEIKJsonV3 || IsUEIKJsonV4 || IsUEIKJsonV5 ||
+            IsUEIKJsonV6)
         {
             const nlohmann::json& Import =
                 Json.at("ueFbxImport");
@@ -1929,7 +2000,8 @@ bool ReadRetargetBridgeRequest(
                     Import.at("sourceAnimationGoldenJson")
                         .get<std::string>());
         }
-        if (IsUEIKJsonV4 || IsUEIKJsonV5)
+        if (IsUEIKJsonV4 || IsUEIKJsonV5 ||
+            (IsUEIKJsonV6 && Json.contains("assetSelection")))
         {
             const nlohmann::json& Selection =
                 Json.at("assetSelection");
@@ -1953,7 +2025,7 @@ bool ReadRetargetBridgeRequest(
             Binding.SourceAnimationSkeletonId =
                 Selection.at("sourceAnimationSkeletonId")
                     .get<std::string>();
-            if (IsUEIKJsonV5)
+            if (Selection.contains("characterProfiles"))
             {
                 const nlohmann::json& Profiles =
                     Selection.at("characterProfiles");
@@ -1993,6 +2065,23 @@ bool ReadRetargetBridgeRequest(
             Binding.SourceAnimationGoldenJsonSha256 =
                 Expected.at("sourceAnimationGoldenJson")
                     .get<std::string>();
+        }
+        if (IsUEIKJsonV6)
+        {
+            const nlohmann::json& OperationStack =
+                Json.at("operationStack");
+            if (!OperationStack.at("candidate").get<bool>() ||
+                OperationStack.at("selected").get<bool>() ||
+                OperationStack.at("adopted").get<bool>())
+            {
+                OutError =
+                    "Operation System v2 request must remain candidate-only";
+                return false;
+            }
+            OutRequest.OperationStackJson = PathFromUtf8(
+                OperationStack.at("configJson").get<std::string>());
+            OutRequest.OperationStackJsonExpectedSha256 =
+                OperationStack.at("expectedSha256").get<std::string>();
         }
         const nlohmann::json& Tools = Json.at("tools");
         OutRequest.Tools.BridgeExecutable = PathFromUtf8(
@@ -2103,6 +2192,14 @@ std::vector<std::string> BuildUEIKJsonRetargeterArguments(
         Arguments.emplace_back("--animation-stack");
         Arguments.emplace_back(Request.AnimationStack);
     }
+    if (!Request.OperationStackJson.empty())
+    {
+        Arguments.emplace_back("--op-stack-json");
+        Arguments.emplace_back(
+            PathToUtf8(Request.OperationStackJson));
+        Arguments.emplace_back("--op-stack-sha256");
+        Arguments.emplace_back(Preflight.OperationStackJsonSha256);
+    }
     return Arguments;
 }
 
@@ -2133,6 +2230,7 @@ static RetargetBridgeRunResult RunRetargetBridgeImpl(
     ResolvePath(Resolved.SourceAlignmentRetargeterJson);
     ResolvePath(Resolved.TargetAlignmentRetargeterJson);
     ResolvePath(Resolved.SourceAnimationGoldenJson);
+    ResolvePath(Resolved.OperationStackJson);
     ResolvePath(Resolved.AssetBinding.CatalogFile);
     ResolvePath(Resolved.AssetBinding.SourceProfilePackage);
     ResolvePath(Resolved.AssetBinding.TargetProfilePackage);

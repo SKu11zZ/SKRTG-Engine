@@ -77,6 +77,8 @@ struct RetargetBridgeRequest
     std::filesystem::path SourceAlignmentRetargeterJson;
     std::filesystem::path TargetAlignmentRetargeterJson;
     std::filesystem::path SourceAnimationGoldenJson;
+    std::filesystem::path OperationStackJson;
+    std::string OperationStackJsonExpectedSha256;
     std::filesystem::path OutputDirectory;
     RetargetBridgeTools Tools;
     std::string ClipId;
@@ -112,6 +114,7 @@ struct RetargetBridgePreflight
     std::string SourceAlignmentRetargeterJsonSha256;
     std::string TargetAlignmentRetargeterJsonSha256;
     std::string SourceAnimationGoldenJsonSha256;
+    std::string OperationStackJsonSha256;
     std::vector<std::string> Errors;
     std::vector<std::string> Warnings;
 };

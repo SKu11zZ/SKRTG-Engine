@@ -1709,6 +1709,9 @@ int RunNativeViewer(
             const bool FootLockAvailable =
                 FootLockComparisonAvailable(Current);
             const ReviewClipInfo* Clip = CurrentReviewClipInfo(Current);
+            const bool OperationStackEnabled =
+                Current.OperationStackCandidateEnabled &&
+                Clip != nullptr && Clip->OperationStackEnabled;
             const FootLockDeltaSummary FootLockDelta =
                 MeasureFootLockDelta(Current, Display.GoalTrails);
             const std::optional<float> MeshDelta =
@@ -1718,7 +1721,13 @@ int RunNativeViewer(
                 "%.3f fps  |  四视图同步帧 / 相机 / 投影 / 显示尺度  |  Goal 历史 %zu 帧",
                 Current.FramesPerSecond,
                 Display.GoalTrails.SampleCount);
-            if (!FootLockAvailable)
+            if (OperationStackEnabled)
+            {
+                ImGui::TextColored(
+                    {1.0F, 0.76F, 0.30F, 1.0F},
+                    "Operation System v2 候选已写入 Final；当前结果未选择、未采纳。Viewer 只显示已验证 SKRV，不在显示层重新求解。");
+            }
+            else if (!FootLockAvailable)
             {
                 ImGui::TextColored(
                     {1.0F, 0.66F, 0.25F, 1.0F},
@@ -1762,6 +1771,8 @@ int RunNativeViewer(
                 ResultLane == ReviewLane::Foundation;
             const char* ResultTitle = ShowFoundationResult
                 ? "对照结果 · Foot Lock OFF"
+                : OperationStackEnabled
+                    ? "最终结果 · Operation System v2 候选"
                 : UEIKCandidateRoute
                     ? "最终结果 · UE IK JSON 候选"
                     : FootLockAvailable
@@ -1769,6 +1780,8 @@ int RunNativeViewer(
                         : "最终结果 · Final";
             const char* ResultSubtitle = ShowFoundationResult
                 ? "锁脚前 Foundation（独立显示）"
+                : OperationStackEnabled
+                    ? "Foundation 后配置 Ops（未采纳）"
                 : UEIKCandidateRoute
                     ? "候选 Final（无 Foot Lock A/B）"
                     : FootLockAvailable
@@ -1978,6 +1991,21 @@ int RunNativeViewer(
               << "skrv_v1_verified="
               << (Scene.has_value() ? "true" : "false") << '\n'
               << "retargeter_algorithms_executed=false\n"
+              << "operation_stack_candidate_enabled="
+              << (Scene.has_value() &&
+                          Scene->OperationStackCandidateEnabled
+                    ? "true" : "false") << '\n'
+              << "operation_stack_candidate_selected="
+              << (Scene.has_value() &&
+                          Scene->OperationStackCandidateSelected
+                    ? "true" : "false") << '\n'
+              << "operation_stack_candidate_adopted="
+              << (Scene.has_value() &&
+                          Scene->OperationStackCandidateAdopted
+                    ? "true" : "false") << '\n'
+              << "operation_stack_clip_enabled="
+              << (FinalClip != nullptr && FinalClip->OperationStackEnabled
+                    ? "true" : "false") << '\n'
               << "retarget_bridge_completed_runs="
               << BridgeUi.CompletedRunCount() << '\n'
               << "foot_lock_display_enabled="

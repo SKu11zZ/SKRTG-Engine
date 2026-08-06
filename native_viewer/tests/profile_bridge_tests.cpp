@@ -410,6 +410,61 @@ void TestProfileBoundBridge()
     Check(PreflightRetargetBridge(RoundTrip).Success,
           "round-tripped profile-bound request should pass preflight");
 
+    const std::filesystem::path OperationStack =
+        Root.Path / "operation_stack.json";
+    Write(
+        OperationStack,
+        Json{
+            {"schema", "skrtg.op_stack.v2"},
+            {"schemaVersion", 2},
+            {"candidate", true},
+            {"execution", {{"repeatabilityMode", "single_pass"}}},
+            {"goalSeeds", Json::array({
+                {{"name", "pelvis_goal"},
+                 {"targetBone", "pelvis"}}})},
+            {"operations", Json::array({
+                {{"instanceId", "pelvis_writeback"},
+                 {"type", "unified_goal_solver_v1"},
+                 {"enabled", false},
+                 {"settings",
+                  {{"bindings", Json::array({
+                      {{"label", "pelvis"},
+                       {"goalName", "pelvis_goal"},
+                       {"mode", "direct_bone"},
+                       {"targetBone", "pelvis"}}})}}}}})}}
+            .dump(2) +
+            "\n");
+    Request.OperationStackJson = OperationStack;
+    Request.OperationStackJsonExpectedSha256 = Hash(OperationStack);
+    const RetargetBridgePreflight OperationPreflight =
+        PreflightRetargetBridge(Request);
+    Check(OperationPreflight.Success &&
+              OperationPreflight.OperationStackJsonSha256 ==
+                  Request.OperationStackJsonExpectedSha256,
+          "Operation System v2 config must be hash-bound during Bridge "
+          "preflight");
+    const std::filesystem::path OperationRequestFile =
+        Root.Path / "operation_request.json";
+    Check(WriteRetargetBridgeRequest(
+              Request, OperationRequestFile, Error),
+          "Operation System v2 Bridge request should serialize");
+    const Json OperationRequestJson =
+        Json::parse(Read(OperationRequestFile));
+    Check(OperationRequestJson.at("schema") ==
+              "skrtg.native_viewer.retarget_bridge_request.v6" &&
+              OperationRequestJson.at("operationStack")
+                  .at("candidate").get<bool>() &&
+              !OperationRequestJson.at("operationStack")
+                  .at("selected").get<bool>(),
+          "Operation System v2 Bridge request must remain an explicit "
+          "unselected candidate");
+    RetargetBridgeRequest OperationRoundTrip;
+    Check(ReadRetargetBridgeRequest(
+              OperationRequestFile, OperationRoundTrip, Error) &&
+              OperationRoundTrip.OperationStackJson == OperationStack &&
+              PreflightRetargetBridge(OperationRoundTrip).Success,
+          "hash-bound Operation System v2 Bridge request must round-trip");
+
     BatchRetargetRequest Batch;
     Batch.SourceCharacter.RestFbx = Request.SourceRestFbx;
     Batch.SourceCharacter.DefinitionKind = "ue_ik_json_v1";
@@ -426,6 +481,8 @@ void TestProfileBoundBridge()
     Batch.Recursive = false;
     Batch.EnableSpinePelvisFollow = false;
     Batch.EnableSourceMotionFootLock = false;
+    Batch.OperationStackJson = OperationStack;
+    Batch.OperationStackJsonExpectedSha256 = Hash(OperationStack);
     Batch.AssetBinding = Binding;
     const auto AddBatchAnimation =
         [&](const std::string& Id,
@@ -469,7 +526,11 @@ void TestProfileBoundBridge()
           "profile-backed batch must preserve fixed serial execution");
     Check(BatchPlan.Preflights[1].CacheHits > 0,
           "complete-selection preflight should reuse shared profile, "
-          "catalog, rest, and rig evidence across animations");
+          "catalog, rest, rig, and Op config evidence across animations");
+    Check(BatchPlan.Preflights[1].OperationStackJsonSha256 ==
+              Batch.OperationStackJsonExpectedSha256,
+          "whole-batch preflight must bind the shared Operation System "
+          "v2 config hash");
     RetargetBridgeRequest MismatchedExecution = Request;
     MismatchedExecution.OutputDirectory =
         Root.Path / "mismatched_preflight_output";
@@ -500,27 +561,30 @@ void TestProfileBoundBridge()
           "and animation Stack");
 
     const std::filesystem::path BatchRequestFile =
-        Root.Path / "batch_v3.json";
+        Root.Path / "batch_v4.json";
     Check(WriteBatchRetargetRequest(
               Batch, BatchRequestFile, Error),
-          "profile-backed batch v3 should serialize");
+          "profile-backed Operation System v2 batch should serialize");
     const Json BatchJson = Json::parse(Read(BatchRequestFile));
     Check(BatchJson.at("schema") ==
-              "skrtg.native_viewer.batch_retarget_request.v3" &&
+              "skrtg.native_viewer.batch_retarget_request.v4" &&
               BatchJson.at("animations").size() == 2 &&
               BatchJson.at("animationDirectory") == "" &&
-              !BatchJson.at("recursive").get<bool>(),
-          "profile-backed batch v3 JSON must contain explicit catalog "
-          "animations and no loose folder scan");
+              !BatchJson.at("recursive").get<bool>() &&
+              BatchJson.at("operationStack")
+                  .at("candidate").get<bool>(),
+          "profile-backed batch v4 JSON must contain explicit catalog "
+          "animations, one candidate Op config, and no loose folder scan");
     BatchRetargetRequest BatchRoundTrip;
     Check(ReadBatchRetargetRequest(
               BatchRequestFile, BatchRoundTrip, Error),
-          "profile-backed batch v3 should deserialize");
+          "profile-backed batch v4 should deserialize");
     Check(BatchRoundTrip.AssetBinding.SourceProfilePackageSha256 ==
               Binding.SourceProfilePackageSha256 &&
               BatchRoundTrip.CatalogAnimations.size() == 2 &&
+              BatchRoundTrip.OperationStackJson == OperationStack &&
               BuildBatchRetargetPlan(BatchRoundTrip).Success,
-          "round-tripped batch v3 must preserve profile bindings and "
+          "round-tripped batch v4 must preserve profile and Op bindings and "
           "pass full preflight");
     Json RecursiveBatchJson = BatchJson;
     RecursiveBatchJson["recursive"] = true;
@@ -544,6 +608,8 @@ void TestProfileBoundBridge()
     BatchStatus.Recursive = false;
     BatchStatus.EnableSpinePelvisFollow = false;
     BatchStatus.EnableSourceMotionFootLock = false;
+    BatchStatus.OperationStackJson = OperationStack;
+    BatchStatus.OperationStackJsonSha256 = Hash(OperationStack);
     BatchStatus.AssetBinding = Batch.AssetBinding;
     BatchStatus.Jobs = BatchPlan.Jobs;
     const std::filesystem::path BatchStatusFile =
@@ -554,15 +620,19 @@ void TestProfileBoundBridge()
     const Json WrittenBatchStatus =
         Json::parse(Read(BatchStatusFile));
     Check(WrittenBatchStatus.at("schema") ==
-              "skrtg.native_viewer.batch_retarget_status.v3" &&
+              "skrtg.native_viewer.batch_retarget_status.v4" &&
               WrittenBatchStatus.contains("timings") &&
-              WrittenBatchStatus.at("jobs").at(0).contains("timings"),
-          "profile-backed status v3 must expose batch and per-job timings");
+              WrittenBatchStatus.at("jobs").at(0).contains("timings") &&
+              WrittenBatchStatus.at("operationStack")
+                  .at("configSha256") == Hash(OperationStack),
+          "profile-backed status v4 must expose timings and the bound Op "
+          "config");
     BatchRetargetStatus StatusRoundTrip;
     Check(ReadBatchRetargetStatus(
               BatchStatusFile, StatusRoundTrip, Error) &&
               StatusRoundTrip.AssetBinding.Required &&
               StatusRoundTrip.Jobs.size() == 2 &&
+              StatusRoundTrip.OperationStackJson == OperationStack &&
               StatusRoundTrip.Jobs[0].SourceAnimationGoldenJson ==
                   Golden,
           "profile-backed status v2 must retain package and per-job "
@@ -570,6 +640,7 @@ void TestProfileBoundBridge()
     Json CompatibleV2Status = WrittenBatchStatus;
     CompatibleV2Status["schema"] =
         "skrtg.native_viewer.batch_retarget_status.v2";
+    CompatibleV2Status.erase("operationStack");
     CompatibleV2Status.erase("timings");
     for (Json& Job : CompatibleV2Status["jobs"])
         Job.erase("timings");
@@ -688,6 +759,23 @@ void TestProfileBoundBridge()
     Check(!BuildBatchRetargetPlan(RecursiveFolderSemantics).Success,
           "profile-backed batch must reject recursive folder semantics "
           "for direct C++ callers");
+    BatchRetargetRequest WrongOperationHash = Batch;
+    WrongOperationHash.OperationStackJsonExpectedSha256 =
+        std::string(64, '0');
+    Check(!BuildBatchRetargetPlan(WrongOperationHash).Success,
+          "batch preflight must fail closed on an Operation System v2 "
+          "config hash mismatch");
+    BatchRetargetRequest UnboundOperation = Batch;
+    UnboundOperation.AssetBinding = {};
+    const std::filesystem::path UnboundOperationFile =
+        Root.Path / "unbound_operation_batch.json";
+    Error.clear();
+    Check(!WriteBatchRetargetRequest(
+              UnboundOperation, UnboundOperationFile, Error) &&
+              Error.find("profile/catalog") != std::string::npos &&
+              !std::filesystem::exists(UnboundOperationFile),
+          "Operation System v2 batch serialization must fail closed "
+          "without an exact profile/catalog selection");
     const std::string OriginalGoldenTwo = Read(GoldenTwo);
     Write(GoldenTwo, "tampered-golden");
     Check(!BuildBatchRetargetPlan(Batch).Success,

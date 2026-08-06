@@ -60,6 +60,22 @@ bool Equal(TransformRT Left, TransformRT Right)
         Equal(Left.Rotation, Right.Rotation) &&
         Equal(Left.Scale, Right.Scale);
 }
+
+bool Equal(const RetargetOpGoal& Left, const RetargetOpGoal& Right)
+{
+    return Left.Name == Right.Name &&
+        Left.TargetBoneIndex == Right.TargetBoneIndex &&
+        Equal(Left.TransformModel, Right.TransformModel);
+}
+
+bool EqualGoals(const std::vector<RetargetOpGoal>& Left,
+                const std::vector<RetargetOpGoal>& Right)
+{
+    if (Left.size() != Right.size()) return false;
+    for (std::size_t Index = 0; Index < Left.size(); ++Index)
+        if (!Equal(Left[Index], Right[Index])) return false;
+    return true;
+}
 bool EqualPose(const PoseBuffer& Left, const PoseBuffer& Right)
 {
     if (Left.Space() != Right.Space() ||
@@ -143,6 +159,19 @@ bool ValidateClipShape(const NormalizedRuntimeSkeleton& SourceSkeleton,
         {
             if (!Finite(Frame.SourceModelPose[Index])) return false;
         }
+        std::set<std::string> GoalNames;
+        for (const RetargetOpGoal& Goal : Frame.Goals)
+        {
+            if (Goal.Name.empty() ||
+                !GoalNames.insert(Goal.Name).second ||
+                Goal.TargetBoneIndex < -1 ||
+                Goal.TargetBoneIndex >=
+                    static_cast<int>(TargetSkeleton.BoneCount()) ||
+                !Finite(Goal.TransformModel))
+            {
+                return false;
+            }
+        }
         PoseBuffer Rebuilt;
         if (!BuildModelPose(TargetSkeleton,
                             Frame.TargetLocalPose, Rebuilt) ||
@@ -158,10 +187,22 @@ bool ValidateClipShape(const NormalizedRuntimeSkeleton& SourceSkeleton,
 bool DescriptorValid(const NormalizedRuntimeSkeleton& TargetSkeleton,
                      const RetargetOpDescriptor& Descriptor)
 {
+    const int Phase = static_cast<int>(Descriptor.Phase);
     if (Descriptor.TypeId.empty() || Descriptor.Version <= 0 ||
-        Descriptor.DisplayName.empty())
+        Descriptor.DisplayName.empty() ||
+        Phase < static_cast<int>(RetargetOpPhase::GoalGeneration) ||
+        Phase > static_cast<int>(RetargetOpPhase::PostSolve))
     {
         return false;
+    }
+    std::set<std::string> RequiredTypes;
+    for (const std::string& TypeId : Descriptor.RequiredEarlierTypeIds)
+    {
+        if (TypeId.empty() || TypeId == Descriptor.TypeId ||
+            !RequiredTypes.insert(TypeId).second)
+        {
+            return false;
+        }
     }
     std::set<int> Indices;
     for (const RetargetOpBoneWriteMask& Mask : Descriptor.DeclaredWrites)
@@ -170,6 +211,17 @@ bool DescriptorValid(const NormalizedRuntimeSkeleton& TargetSkeleton,
             Mask.BoneIndex >= static_cast<int>(TargetSkeleton.BoneCount()) ||
             (!Mask.Translation && !Mask.Rotation && !Mask.Scale) ||
             !Indices.insert(Mask.BoneIndex).second)
+        {
+            return false;
+        }
+    }
+    std::set<std::string> GoalNames;
+    for (const RetargetOpGoalWriteMask& Mask :
+         Descriptor.DeclaredGoalWrites)
+    {
+        if (Mask.GoalName.empty() ||
+            (!Mask.Translation && !Mask.Rotation) ||
+            !GoalNames.insert(Mask.GoalName).second)
         {
             return false;
         }
@@ -185,6 +237,12 @@ bool MutationWithin(const RetargetOpClip& Before,
     std::map<int, RetargetOpBoneWriteMask> Masks;
     for (const RetargetOpBoneWriteMask& Mask : Descriptor.DeclaredWrites)
         Masks.emplace(Mask.BoneIndex, Mask);
+    std::map<std::string, RetargetOpGoalWriteMask> GoalMasks;
+    for (const RetargetOpGoalWriteMask& Mask :
+         Descriptor.DeclaredGoalWrites)
+    {
+        GoalMasks.emplace(Mask.GoalName, Mask);
+    }
     for (std::size_t FrameIndex = 0;
          FrameIndex < Before.Frames.size(); ++FrameIndex)
     {
@@ -213,6 +271,53 @@ bool MutationWithin(const RetargetOpClip& Before,
                 return false;
             }
         }
+
+        std::map<std::string, const RetargetOpGoal*> BeforeGoals;
+        std::map<std::string, const RetargetOpGoal*> AfterGoals;
+        for (const RetargetOpGoal& Goal : A.Goals)
+            BeforeGoals.emplace(Goal.Name, &Goal);
+        for (const RetargetOpGoal& Goal : B.Goals)
+            AfterGoals.emplace(Goal.Name, &Goal);
+        std::set<std::string> AllGoalNames;
+        for (const auto& Pair : BeforeGoals) AllGoalNames.insert(Pair.first);
+        for (const auto& Pair : AfterGoals) AllGoalNames.insert(Pair.first);
+        for (const std::string& Name : AllGoalNames)
+        {
+            const auto BeforeIt = BeforeGoals.find(Name);
+            const auto AfterIt = AfterGoals.find(Name);
+            const auto MaskIt = GoalMasks.find(Name);
+            if (BeforeIt == BeforeGoals.end())
+            {
+                if (AfterIt == AfterGoals.end() ||
+                    MaskIt == GoalMasks.end() ||
+                    !MaskIt->second.AllowCreate)
+                {
+                    return false;
+                }
+                continue;
+            }
+            if (AfterIt == AfterGoals.end()) return false;
+            const RetargetOpGoal& X = *BeforeIt->second;
+            const RetargetOpGoal& Y = *AfterIt->second;
+            if (MaskIt == GoalMasks.end())
+            {
+                if (!Equal(X, Y)) return false;
+                continue;
+            }
+            const RetargetOpGoalWriteMask& Mask = MaskIt->second;
+            if (X.TargetBoneIndex != Y.TargetBoneIndex ||
+                !Equal(X.TransformModel.Scale,
+                       Y.TransformModel.Scale) ||
+                (!Mask.Translation &&
+                 !Equal(X.TransformModel.TranslationCm,
+                        Y.TransformModel.TranslationCm)) ||
+                (!Mask.Rotation &&
+                 !Equal(X.TransformModel.Rotation,
+                        Y.TransformModel.Rotation)))
+            {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -222,6 +327,19 @@ bool OutputModelsValid(const NormalizedRuntimeSkeleton& TargetSkeleton,
 {
     for (const RetargetOpFrame& Frame : Clip.Frames)
     {
+        std::set<std::string> GoalNames;
+        for (const RetargetOpGoal& Goal : Frame.Goals)
+        {
+            if (Goal.Name.empty() ||
+                !GoalNames.insert(Goal.Name).second ||
+                Goal.TargetBoneIndex < -1 ||
+                Goal.TargetBoneIndex >=
+                    static_cast<int>(TargetSkeleton.BoneCount()) ||
+                !Finite(Goal.TransformModel))
+            {
+                return false;
+            }
+        }
         PoseBuffer Rebuilt;
         if (!BuildModelPose(TargetSkeleton,
                             Frame.TargetLocalPose, Rebuilt) ||
@@ -261,12 +379,113 @@ bool EquivalentRetargetOpClips(const RetargetOpClip& Left,
             A.TimeSeconds != B.TimeSeconds ||
             !EqualPose(A.SourceModelPose, B.SourceModelPose) ||
             !EqualPose(A.TargetLocalPose, B.TargetLocalPose) ||
-            !EqualPose(A.TargetModelPose, B.TargetModelPose))
+            !EqualPose(A.TargetModelPose, B.TargetModelPose) ||
+            !EqualGoals(A.Goals, B.Goals))
         {
             return false;
         }
     }
     return true;
+}
+
+RetargetOpPreflightResult IRetargetOp::Preflight(
+    const NormalizedRuntimeSkeleton&,
+    const NormalizedRuntimeSkeleton&,
+    const RetargetOpClip&) const
+{
+    return {};
+}
+
+const RetargetOpGoal* FindRetargetOpGoal(
+    const RetargetOpFrame& Frame, const std::string& GoalName)
+{
+    for (const RetargetOpGoal& Goal : Frame.Goals)
+        if (Goal.Name == GoalName) return &Goal;
+    return nullptr;
+}
+
+RetargetOpGoal* FindRetargetOpGoal(
+    RetargetOpFrame& Frame, const std::string& GoalName)
+{
+    for (RetargetOpGoal& Goal : Frame.Goals)
+        if (Goal.Name == GoalName) return &Goal;
+    return nullptr;
+}
+
+bool SeedRetargetOpGoals(
+    const NormalizedRuntimeSkeleton& TargetSkeleton,
+    const std::vector<RetargetOpGoalSeed>& Seeds,
+    RetargetOpClip& InOutClip,
+    std::string& OutError)
+{
+    std::set<std::string> Names;
+    for (const RetargetOpGoalSeed& Seed : Seeds)
+    {
+        if (Seed.GoalName.empty() ||
+            !Names.insert(Seed.GoalName).second ||
+            Seed.TargetBoneIndex < 0 ||
+            Seed.TargetBoneIndex >=
+                static_cast<int>(TargetSkeleton.BoneCount()))
+        {
+            OutError = "goal seed is invalid or duplicated";
+            return false;
+        }
+    }
+    RetargetOpClip Candidate = InOutClip;
+    for (RetargetOpFrame& Frame : Candidate.Frames)
+    {
+        for (const RetargetOpGoalSeed& Seed : Seeds)
+        {
+            if (FindRetargetOpGoal(Frame, Seed.GoalName) != nullptr)
+            {
+                OutError = "goal seed collides with an existing goal: " +
+                    Seed.GoalName;
+                return false;
+            }
+            RetargetOpGoal Goal;
+            Goal.Name = Seed.GoalName;
+            Goal.TargetBoneIndex = Seed.TargetBoneIndex;
+            Goal.TransformModel = Frame.TargetModelPose[
+                static_cast<std::size_t>(Seed.TargetBoneIndex)];
+            Frame.Goals.push_back(std::move(Goal));
+        }
+    }
+    InOutClip = std::move(Candidate);
+    return true;
+}
+
+const char* ToString(const RetargetOpPhase Phase)
+{
+    switch (Phase)
+    {
+    case RetargetOpPhase::GoalGeneration:
+        return "goal_generation";
+    case RetargetOpPhase::GoalWarp:
+        return "goal_warp";
+    case RetargetOpPhase::TemporalGoalConstraint:
+        return "temporal_goal_constraint";
+    case RetargetOpPhase::SpatialGoalConstraint:
+        return "spatial_goal_constraint";
+    case RetargetOpPhase::PoseSolve:
+        return "pose_solve";
+    case RetargetOpPhase::PostSolve:
+        return "post_solve";
+    default:
+        return "unknown";
+    }
+}
+
+const char* ToString(const RetargetOpRepeatabilityMode Mode)
+{
+    switch (Mode)
+    {
+    case RetargetOpRepeatabilityMode::PerOperatorAudit:
+        return "per_operator_audit";
+    case RetargetOpRepeatabilityMode::SinglePass:
+        return "single_pass";
+    default:
+        return "unknown";
+    }
 }
 
 bool RetargetOpStack::Add(std::string InstanceId,
@@ -310,9 +529,23 @@ RetargetOpStackRunResult RetargetOpStack::Run(
     const NormalizedRuntimeSkeleton& TargetSkeleton,
     const RetargetOpClip& FoundationInput)
 {
+    return Run(SourceSkeleton, TargetSkeleton, FoundationInput, {});
+}
+
+RetargetOpStackRunResult RetargetOpStack::Run(
+    const NormalizedRuntimeSkeleton& SourceSkeleton,
+    const NormalizedRuntimeSkeleton& TargetSkeleton,
+    const RetargetOpClip& FoundationInput,
+    const RetargetOpStackRunOptions& Options)
+{
     RetargetOpStackRunResult Result;
     Result.FinalOutput = FoundationInput;
-    const RetargetOpClip FoundationSnapshot = FoundationInput;
+    const bool AuditRepeatability =
+        Options.RepeatabilityMode ==
+        RetargetOpRepeatabilityMode::PerOperatorAudit;
+    const RetargetOpClip FoundationSnapshot = AuditRepeatability
+        ? FoundationInput
+        : RetargetOpClip{};
     if (!ValidateClipShape(SourceSkeleton, TargetSkeleton,
                            FoundationInput))
     {
@@ -324,6 +557,9 @@ RetargetOpStackRunResult RetargetOpStack::Run(
 
     bool DisabledExact = true;
     bool ExecutedBounded = true;
+    int PreviousEnabledPhase =
+        static_cast<int>(RetargetOpPhase::GoalGeneration);
+    std::set<std::string> SuccessfulTypeIds;
     for (RetargetOpStackEntry& Entry : StackEntries)
     {
         RetargetOpStackStageResult Stage;
@@ -341,8 +577,8 @@ RetargetOpStackRunResult RetargetOpStack::Run(
         const RetargetOpDescriptor Descriptor = Entry.Op->Descriptor();
         Stage.TypeId = Descriptor.TypeId;
         Stage.Version = Descriptor.Version;
+        Stage.Phase = Descriptor.Phase;
         const RetargetOpClip StageInput = Result.FinalOutput;
-        const RetargetOpClip StageInputSnapshot = StageInput;
         if (!Entry.Enabled)
         {
             Stage.Success = true;
@@ -364,20 +600,79 @@ RetargetOpStackRunResult RetargetOpStack::Run(
             break;
         }
 
+        const int Phase = static_cast<int>(Descriptor.Phase);
+        if (Phase < PreviousEnabledPhase)
+        {
+            Stage.Errors.push_back(
+                "operator phase appears after a later phase");
+            Result.Errors.push_back(
+                Entry.InstanceId + ": invalid operator phase ordering");
+            ExecutedBounded = false;
+            Result.Stages.push_back(std::move(Stage));
+            break;
+        }
+        bool DependenciesSatisfied = true;
+        for (const std::string& RequiredType :
+             Descriptor.RequiredEarlierTypeIds)
+        {
+            if (SuccessfulTypeIds.find(RequiredType) ==
+                SuccessfulTypeIds.end())
+            {
+                Stage.Errors.push_back(
+                    "required earlier operator is unavailable: " +
+                    RequiredType);
+                DependenciesSatisfied = false;
+            }
+        }
+        if (!DependenciesSatisfied)
+        {
+            Result.Errors.push_back(
+                Entry.InstanceId + ": operator dependency check failed");
+            ExecutedBounded = false;
+            Result.Stages.push_back(std::move(Stage));
+            break;
+        }
+        const RetargetOpPreflightResult Preflight =
+            Entry.Op->Preflight(
+                SourceSkeleton, TargetSkeleton, StageInput);
+        Stage.PreflightPassed = Preflight.Available &&
+            Preflight.Errors.empty();
+        Stage.Warnings = Preflight.Warnings;
+        Stage.Errors.insert(
+            Stage.Errors.end(), Preflight.Errors.begin(),
+            Preflight.Errors.end());
+        if (!Stage.PreflightPassed)
+        {
+            Result.Errors.push_back(
+                Entry.InstanceId + ": operator is unavailable for input");
+            ExecutedBounded = false;
+            Result.Stages.push_back(std::move(Stage));
+            break;
+        }
+
         Stage.Executed = true;
         RetargetOpRunResult OpResult = Entry.Op->Run(
             SourceSkeleton, TargetSkeleton, StageInput);
-        const RetargetOpRunResult RepeatResult = Entry.Op->Run(
-            SourceSkeleton, TargetSkeleton, StageInputSnapshot);
-        Stage.DeterministicRepeatabilityVerified =
-            EquivalentRunResults(OpResult, RepeatResult);
-        const bool InputImmutable =
-            EquivalentRetargetOpClips(StageInput,
-                                      StageInputSnapshot) &&
-            EquivalentRetargetOpClips(Result.FinalOutput,
-                                      StageInputSnapshot);
+        Stage.RepeatabilityCheckPerformed = AuditRepeatability;
+        Stage.DeterministicRepeatabilityVerified = false;
+        bool InputImmutable = true;
+        if (AuditRepeatability)
+        {
+            const RetargetOpClip StageInputSnapshot = StageInput;
+            const RetargetOpRunResult RepeatResult = Entry.Op->Run(
+                SourceSkeleton, TargetSkeleton, StageInputSnapshot);
+            Stage.DeterministicRepeatabilityVerified =
+                EquivalentRunResults(OpResult, RepeatResult);
+            InputImmutable =
+                EquivalentRetargetOpClips(StageInput,
+                                          StageInputSnapshot) &&
+                EquivalentRetargetOpClips(Result.FinalOutput,
+                                          StageInputSnapshot);
+        }
+        const bool RepeatabilitySatisfied = !AuditRepeatability ||
+            Stage.DeterministicRepeatabilityVerified;
         const bool Scope = OpResult.Success &&
-            Stage.DeterministicRepeatabilityVerified && InputImmutable &&
+            RepeatabilitySatisfied && InputImmutable &&
             OpResult.InputImmutable &&
             MutationWithin(StageInput, OpResult.Output, Descriptor);
         const bool Models = OpResult.Success &&
@@ -385,13 +680,36 @@ RetargetOpStackRunResult RetargetOpStack::Run(
         Stage.MutationWithinDeclaredChannels = Scope;
         Stage.OutputModelsRebuilt = Models;
         Stage.Success = OpResult.Success &&
-            Stage.DeterministicRepeatabilityVerified && Scope && Models;
+            RepeatabilitySatisfied && Scope && Models;
         Stage.FailureLeftInputUnchanged =
             OpResult.FailureLeftInputUnchanged;
         Stage.Errors = OpResult.Errors;
-        if (!Stage.DeterministicRepeatabilityVerified)
+        if (AuditRepeatability &&
+            !Stage.DeterministicRepeatabilityVerified)
+        {
             Stage.Errors.push_back(
                 "operator repeatability check failed");
+        }
+        if (!InputImmutable || !OpResult.InputImmutable)
+        {
+            Stage.Errors.push_back(
+                "operator did not satisfy the immutable-input contract");
+        }
+        if (OpResult.Success && !Scope)
+        {
+            Stage.Errors.push_back(
+                "operator wrote outside its declared bone/goal channels");
+        }
+        if (OpResult.Success && !Models)
+        {
+            Stage.Errors.push_back(
+                "operator output failed model-pose rebuild validation");
+        }
+        if (!OpResult.Success && OpResult.Errors.empty())
+        {
+            Stage.Errors.push_back(
+                "operator reported failure without diagnostic details");
+        }
         if (!Stage.Success)
         {
             if (!EquivalentRetargetOpClips(StageInput,
@@ -401,17 +719,19 @@ RetargetOpStackRunResult RetargetOpStack::Run(
             }
             Result.Errors.push_back(
                 Entry.InstanceId + ": operator failed bounded execution");
-            for (const std::string& Error : OpResult.Errors)
+            for (const std::string& Error : Stage.Errors)
                 Result.Errors.push_back(Entry.InstanceId + ": " + Error);
             ExecutedBounded = false;
             Result.Stages.push_back(std::move(Stage));
             break;
         }
         Result.FinalOutput = std::move(OpResult.Output);
+        PreviousEnabledPhase = Phase;
+        SuccessfulTypeIds.insert(Descriptor.TypeId);
         Result.Stages.push_back(std::move(Stage));
     }
 
-    Result.FoundationInputImmutable =
+    Result.FoundationInputImmutable = !AuditRepeatability ||
         EquivalentRetargetOpClips(FoundationInput,
                                   FoundationSnapshot);
     Result.AllDisabledEntriesExactPassthrough = DisabledExact;

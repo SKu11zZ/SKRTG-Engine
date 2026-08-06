@@ -5,6 +5,42 @@ project(SKRTG
     DESCRIPTION "Offline UE IK JSON driven skeletal retargeting tools"
     LANGUAGES C CXX)
 
+function(skrtg_repair_msvc_ninja_showincludes_prefix)
+    if(NOT (MSVC AND CMAKE_GENERATOR MATCHES "^Ninja"))
+        return()
+    endif()
+
+    set(probe_dir "${CMAKE_BINARY_DIR}/CMakeFiles/SKRTGShowIncludes")
+    file(MAKE_DIRECTORY "${probe_dir}")
+    file(WRITE "${probe_dir}/probe_header.h" "#pragma once\n")
+    file(WRITE "${probe_dir}/probe.cpp"
+        "#include \"probe_header.h\"\nint main() { return 0; }\n")
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}"
+            /nologo /TP /utf-8 /showIncludes /c probe.cpp
+            "/Fo${probe_dir}/probe.obj"
+        WORKING_DIRECTORY "${probe_dir}"
+        OUTPUT_VARIABLE showincludes_output
+        ERROR_VARIABLE showincludes_error
+        RESULT_VARIABLE showincludes_result
+        ENCODING UTF-8)
+    if(NOT showincludes_result EQUAL 0 OR NOT
+       "${showincludes_output}" MATCHES
+       "(^|\n)([^:\n][^:\n]+:[^:\n]*[^: \n][^: \n]:?[ \t]+)([A-Za-z]:\\\\|\\./|\\.\\\\|/)")
+        message(FATAL_ERROR
+            "Unable to establish reliable MSVC/Ninja /showIncludes parsing.\n"
+            "stdout:\n${showincludes_output}\n"
+            "stderr:\n${showincludes_error}")
+    endif()
+    set(CMAKE_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}" PARENT_SCOPE)
+    set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}" PARENT_SCOPE)
+endfunction()
+
+# This must run in the top-level directory scope. Ninja owns one global MSVC
+# dependency prefix; setting it only in native_viewer/ leaves root-generated
+# rules with CMake's incorrectly decoded localized prefix.
+skrtg_repair_msvc_ninja_showincludes_prefix()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 set(CMAKE_CXX_STANDARD 17)
@@ -37,6 +73,11 @@ add_library(skrtg_core STATIC
     src/core/validation/report.cpp
     src/reconciliation/rest_reconciliation.cpp
     src/retarget/op_stack.cpp
+    src/retarget/ops/contact_foot_plant_op.cpp
+    src/retarget/ops/goal_solver_op.cpp
+    src/retarget/ops/ground_floor_constraint_op.cpp
+    src/retarget/ops/stride_warping_op.cpp
+    src/retarget/ops/weapon_goals_op.cpp
     src/retarget/ops/source_motion_foot_lock_op.cpp)
 
 target_include_directories(skrtg_core
@@ -45,6 +86,7 @@ target_compile_features(skrtg_core PUBLIC cxx_std_17)
 skrtg_configure_target(skrtg_core)
 
 add_library(skrtg_ueik_runtime STATIC
+    src/retarget/op_stack_config.cpp
     src/retarget/ue_ik_json_route.cpp)
 target_include_directories(skrtg_ueik_runtime
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -135,6 +177,14 @@ if(SKRTG_BUILD_TESTS)
     skrtg_configure_target(skrtg_source_motion_foot_lock_tests)
     add_test(NAME skrtg_source_motion_foot_lock_contracts
         COMMAND skrtg_source_motion_foot_lock_tests)
+
+    add_executable(skrtg_retarget_goal_ops_tests
+        tests/retarget_goal_ops_tests.cpp)
+    target_link_libraries(skrtg_retarget_goal_ops_tests
+        PRIVATE skrtg_ueik_runtime)
+    skrtg_configure_target(skrtg_retarget_goal_ops_tests)
+    add_test(NAME skrtg_retarget_goal_ops_contracts
+        COMMAND skrtg_retarget_goal_ops_tests)
 endif()
 
 if(SKRTG_BUILD_NATIVE_VIEWER)

@@ -160,6 +160,7 @@ Json ValidManifest(
         {"sourceMeshIndex", 0},
         {"sourceMeshFallbackUsed", false},
         {"limbIkStatus", "committed"},
+        {"operationStackEnabled", false},
         {"sourceMotionFootLockEnabled", false},
         {"sourceMotionFootLockSuccess", true},
         {"sourceMotionFootLockDeterministic", true},
@@ -261,6 +262,9 @@ Json ValidManifest(
           {"sourceMotionFootLockCandidateEnabled", false},
           {"sourceMotionFootLockCandidateSelected", false},
           {"sourceMotionFootLockCandidateAdopted", false},
+          {"operationStackCandidateEnabled", false},
+          {"operationStackCandidateSelected", false},
+          {"operationStackCandidateAdopted", false},
           {"upstreamLimbIkRouteSelected", true},
           {"upstreamLimbIkRouteAdopted", true},
           {"spinePelvisFollowCandidateEnabled", true},
@@ -477,6 +481,14 @@ int main()
     {
         UEIKJsonCandidate["snapshot"][Key] = false;
     }
+    UEIKJsonCandidate["snapshot"]["operationStackCandidateEnabled"] =
+        true;
+    UEIKJsonCandidate["snapshot"]["operationStackCandidateSelected"] =
+        false;
+    UEIKJsonCandidate["snapshot"]["operationStackCandidateAdopted"] =
+        false;
+    UEIKJsonCandidate["snapshot"]["clips"][0]
+        ["operationStackEnabled"] = true;
     Json& UEIKViewer =
         UEIKJsonCandidate["verificationContract"]["viewerContract"];
     UEIKViewer["limb_ik_goal_count_per_side"] = 0;
@@ -498,7 +510,23 @@ int main()
     Check(
         skrtg::viewer::skrv::InspectDirectoryPackage(
             UEIKCandidateRequest.OutputDirectory).Success,
-        "reader reopens the UE IK JSON candidate package");
+        "reader reopens the UE IK JSON candidate package with explicit "
+        "Operation System metadata");
+
+    Json SelectedOperationStack = UEIKJsonCandidate;
+    SelectedOperationStack["snapshot"]
+        ["operationStackCandidateSelected"] = true;
+    Write(
+        Payload / "manifest.json",
+        SelectedOperationStack.dump(2) + "\n");
+    PackageWriteRequest SelectedOperationStackRequest = Request;
+    SelectedOperationStackRequest.OutputDirectory =
+        Root / "selected_operation_stack.skrv";
+    Check(
+        !skrtg::viewer::skrv::WriteDirectoryPackage(
+            SelectedOperationStackRequest).Success,
+        "reader rejects an Operation System candidate that claims route "
+        "selection");
 
     Json UnknownNonFrozen = UEIKJsonCandidate;
     UnknownNonFrozen["snapshot"]["route"] = "unknown_non_frozen_route";

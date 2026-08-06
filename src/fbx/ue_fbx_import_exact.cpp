@@ -453,6 +453,30 @@ void CollectNodes(
     }
 }
 
+bool SceneHasMeshPayload(FbxScene* Scene)
+{
+    if (Scene == nullptr) return false;
+    std::vector<FbxNode*> Nodes;
+    CollectNodes(Scene->GetRootNode(), Nodes);
+    return std::any_of(
+        Nodes.begin(), Nodes.end(),
+        [](FbxNode* Node)
+        {
+            return Node != nullptr && Node->GetMesh() != nullptr;
+        });
+}
+
+bool SceneHasBindPosePayload(FbxScene* Scene)
+{
+    if (Scene == nullptr) return false;
+    for (int Index = 0; Index < Scene->GetPoseCount(); ++Index)
+    {
+        FbxPose* Pose = Scene->GetPose(Index);
+        if (Pose != nullptr && Pose->IsBindPose()) return true;
+    }
+    return false;
+}
+
 void CollectSkinLinks(
     FbxNode* Node,
     std::set<FbxNode*>& Out)
@@ -1786,6 +1810,8 @@ UEFbxImportExactResult LoadUEFbxImportExactClip(
     Result.FbxRangeStartSeconds =
         Span.GetStart().GetSecondDouble();
     Result.DurationSeconds = DurationSeconds;
+    Result.HasMeshPayload = SceneHasMeshPayload(Scene.Scene);
+    Result.HasBindPosePayload = SceneHasBindPosePayload(Scene.Scene);
     Result.Evidence = std::move(Evidence);
     Result.GoldenValidation = std::move(Metrics);
     Result.Bones = std::move(Bones);

@@ -81,6 +81,7 @@ struct RetargetReviewClipView
     int LimbIkFailClosedChainRecords = 0;
     double LimbIkMaximumEndpointErrorCm = 0.0;
     double LimbIkMaximumShadowToRealPositionDeltaCm = 0.0;
+    bool OperationStackEnabled = false;
     bool SourceMotionFootLockEnabled = false;
     bool SourceMotionFootLockSuccess = false;
     bool SourceMotionFootLockDeterministic = false;
@@ -122,6 +123,9 @@ struct RetargetReviewPackageOptions
     bool SourceMotionFootLockCandidateEnabled = false;
     bool SourceMotionFootLockCandidateSelected = false;
     bool SourceMotionFootLockCandidateAdopted = false;
+    bool OperationStackCandidateEnabled = false;
+    bool OperationStackCandidateSelected = false;
+    bool OperationStackCandidateAdopted = false;
     std::vector<RetargetReviewBone> SourceBones;
     std::vector<RetargetReviewBone> TargetBones;
     std::vector<RetargetReviewChain> RetargetChains;

@@ -113,6 +113,9 @@ bool BuildModelPose(
 core::skeleton::NormalizedRuntimeSkeleton BuildTargetRuntimeSkeleton(
     const UEIKJsonRoute& Route);
 
+core::skeleton::NormalizedRuntimeSkeleton BuildSourceRuntimeSkeleton(
+    const UEIKJsonRoute& Route);
+
 UEIKJsonSolveResult SolveUEIKJsonRouteFrame(
     const UEIKJsonRoute& Route,
     const std::vector<core::math::TransformRT>& SourceCurrentLocalPose);

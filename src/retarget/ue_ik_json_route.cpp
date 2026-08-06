@@ -859,6 +859,35 @@ core::skeleton::NormalizedRuntimeSkeleton BuildTargetRuntimeSkeleton(
     return Result;
 }
 
+core::skeleton::NormalizedRuntimeSkeleton BuildSourceRuntimeSkeleton(
+    const UEIKJsonRoute& Route)
+{
+    core::skeleton::NormalizedRuntimeSkeleton Result;
+    core::skeleton::SkeletonIdentity Identity;
+    Identity.HierarchyHash =
+        Route.RouteId + "|source|" + Route.SourceRig.AssetObjectPath;
+    Identity.RestPoseHash =
+        Route.FoundationRouteId + "|" + Route.SourcePoseName;
+    Identity.SourceAssetId = Route.SourceRig.AssetObjectPath;
+    Result.SetIdentity(std::move(Identity));
+    for (const UEIKJsonBone& Bone : Route.SourceRig.Bones)
+    {
+        core::skeleton::RuntimeBone Runtime;
+        Runtime.Name = Bone.Name;
+        Runtime.RawPath = Bone.Name;
+        Runtime.ParentIndex = Bone.ParentIndex;
+        Runtime.RawIndex = Bone.Index;
+        Runtime.LocalRest = Bone.RetargetLocal;
+        Result.AddBone(std::move(Runtime));
+    }
+    std::vector<int> IdentityMap(Route.SourceRig.Bones.size());
+    for (std::size_t Index = 0; Index < IdentityMap.size(); ++Index)
+        IdentityMap[Index] = static_cast<int>(Index);
+    Result.SetRawToNormalized(IdentityMap);
+    Result.SetNormalizedToRaw(std::move(IdentityMap));
+    return Result;
+}
+
 UEIKJsonSolveResult SolveUEIKJsonRouteFrame(
     const UEIKJsonRoute& Route,
     const std::vector<TransformRT>& SourceCurrentLocalPose)

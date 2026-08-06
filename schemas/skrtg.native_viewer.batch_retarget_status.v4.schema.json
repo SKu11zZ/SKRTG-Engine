@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.native_viewer.batch_retarget_status.v4.schema.json",
+  "title": "SKRTG profile-backed Operation System v2 batch status v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "running", "complete", "success", "cancelled",
+    "executionPolicy", "counts", "activeJobIndex", "durationSeconds",
+    "sourceCharacter", "targetCharacter", "animationDirectory",
+    "outputDirectory", "recursive", "animationStack",
+    "enableSpinePelvisFollow", "enableSourceMotionFootLock",
+    "foundationFrozen", "skrvV1Modified", "xmlDefinitionParsingEnabled",
+    "jobs", "errors", "assetSelection", "candidateRouteSelected",
+    "candidateRouteAdopted", "timings", "operationStack"
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "sha256OrEmpty": {"type": "string", "pattern": "^([A-Fa-f0-9]{64})?$"},
+    "seconds": {"type": "number", "minimum": 0},
+    "profileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packageFile", "packageSha256", "profileVersion"],
+      "properties": {
+        "packageFile": {"type": "string", "minLength": 1},
+        "packageSha256": {"$ref": "#/$defs/sha256"},
+        "profileVersion": {"type": "string", "minLength": 1}
+      }
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restFbx", "definitionKind", "definitionFile"],
+      "properties": {
+        "restFbx": {"type": "string", "minLength": 1},
+        "definitionKind": {"const": "ue_ik_json_v1"},
+        "definitionFile": {"type": "string", "minLength": 1},
+        "alignmentRetargeterFile": {"type": "string", "minLength": 1}
+      }
+    },
+    "jobTimings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "planningPreflightSeconds", "bridgePreflightReused",
+        "bridgePreflightSeconds", "retargetWorkerSeconds",
+        "adapterSeconds", "packSeconds", "packageInspectSeconds",
+        "verifiedExportCopySeconds", "bridgeTotalSeconds"
+      ],
+      "properties": {
+        "planningPreflightSeconds": {"$ref": "#/$defs/seconds"},
+        "bridgePreflightReused": {"type": "boolean"},
+        "bridgePreflightSeconds": {"$ref": "#/$defs/seconds"},
+        "retargetWorkerSeconds": {"$ref": "#/$defs/seconds"},
+        "adapterSeconds": {"$ref": "#/$defs/seconds"},
+        "packSeconds": {"$ref": "#/$defs/seconds"},
+        "packageInspectSeconds": {"$ref": "#/$defs/seconds"},
+        "verifiedExportCopySeconds": {"$ref": "#/$defs/seconds"},
+        "bridgeTotalSeconds": {"$ref": "#/$defs/seconds"}
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index", "sourceAnimationFbx", "relativeAnimationPath",
+        "jobDirectory", "reviewPackage", "finalFbx", "clipId",
+        "clipLabel", "sourceAnimationSha256", "finalFbxSha256", "state",
+        "durationSeconds", "errors", "sourceAnimationId",
+        "sourceAnimationSkeletonId", "sourceAnimationGoldenJson",
+        "sourceAnimationGoldenJsonSha256", "animationStack",
+        "sourceFbxImportMode", "restFbxImportMode", "timings"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "sourceAnimationFbx": {"type": "string", "minLength": 1},
+        "relativeAnimationPath": {"type": "string", "minLength": 1},
+        "jobDirectory": {"type": "string", "minLength": 1},
+        "reviewPackage": {"type": "string", "minLength": 1},
+        "finalFbx": {"type": "string", "minLength": 1},
+        "clipId": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "clipLabel": {"type": "string", "minLength": 1},
+        "sourceAnimationSha256": {"$ref": "#/$defs/sha256"},
+        "finalFbxSha256": {"$ref": "#/$defs/sha256OrEmpty"},
+        "state": {"enum": ["pending", "running", "succeeded", "failed"]},
+        "durationSeconds": {"$ref": "#/$defs/seconds"},
+        "errors": {"type": "array", "items": {"type": "string"}},
+        "sourceAnimationId": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "sourceAnimationSkeletonId": {"type": "string", "minLength": 1},
+        "sourceAnimationGoldenJson": {"type": "string", "minLength": 1},
+        "sourceAnimationGoldenJsonSha256": {"$ref": "#/$defs/sha256"},
+        "animationStack": {"type": "string"},
+        "sourceFbxImportMode": {"const": "ue5.8_exact_golden_v1"},
+        "restFbxImportMode": {"const": "ue5.8_exported_y_reflection_v1"},
+        "timings": {"$ref": "#/$defs/jobTimings"}
+      }
+    },
+    "assetSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalogFile", "catalogSha256", "catalogId", "sourceSkeletonId",
+        "targetSkeletonId", "characterProfiles", "expectedSha256"
+      ],
+      "properties": {
+        "catalogFile": {"type": "string", "minLength": 1},
+        "catalogSha256": {"$ref": "#/$defs/sha256"},
+        "catalogId": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "sourceSkeletonId": {"type": "string", "minLength": 1},
+        "targetSkeletonId": {"type": "string", "minLength": 1},
+        "characterProfiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "target"],
+          "properties": {
+            "source": {"$ref": "#/$defs/profileRef"},
+            "target": {"$ref": "#/$defs/profileRef"}
+          }
+        },
+        "expectedSha256": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceRest", "targetRest", "sourceRigJson", "targetRigJson",
+            "sourceAlignmentRetargeterJson", "targetAlignmentRetargeterJson"
+          ],
+          "properties": {
+            "sourceRest": {"$ref": "#/$defs/sha256"},
+            "targetRest": {"$ref": "#/$defs/sha256"},
+            "sourceRigJson": {"$ref": "#/$defs/sha256"},
+            "targetRigJson": {"$ref": "#/$defs/sha256"},
+            "sourceAlignmentRetargeterJson": {"$ref": "#/$defs/sha256"},
+            "targetAlignmentRetargeterJson": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    },
+    "operationStack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configJson", "configSha256", "candidate", "selected", "adopted"],
+      "properties": {
+        "configJson": {"type": "string", "minLength": 1},
+        "configSha256": {"$ref": "#/$defs/sha256"},
+        "candidate": {"const": true},
+        "selected": {"const": false},
+        "adopted": {"const": false}
+      }
+    }
+  },
+  "properties": {
+    "schema": {"const": "skrtg.native_viewer.batch_retarget_status.v4"},
+    "running": {"type": "boolean"},
+    "complete": {"type": "boolean"},
+    "success": {"type": "boolean"},
+    "cancelled": {"type": "boolean"},
+    "executionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximumConcurrentJobs", "mode", "continueAfterJobFailure"],
+      "properties": {
+        "maximumConcurrentJobs": {"const": 1},
+        "mode": {"const": "streaming_one_animation_per_worker"},
+        "continueAfterJobFailure": {"const": true}
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "completed", "succeeded", "failed"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "completed": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "succeeded": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "failed": {"type": "integer", "minimum": 0, "maximum": 100000}
+      }
+    },
+    "activeJobIndex": {
+      "oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+    },
+    "durationSeconds": {"$ref": "#/$defs/seconds"},
+    "sourceCharacter": {"$ref": "#/$defs/character"},
+    "targetCharacter": {"$ref": "#/$defs/character"},
+    "animationDirectory": {"const": ""},
+    "outputDirectory": {"type": "string", "minLength": 1},
+    "recursive": {"const": false},
+    "animationStack": {"type": "string"},
+    "enableSpinePelvisFollow": {"const": false},
+    "enableSourceMotionFootLock": {"const": false},
+    "foundationFrozen": {"const": false},
+    "skrvV1Modified": {"const": false},
+    "xmlDefinitionParsingEnabled": {"const": false},
+    "jobs": {
+      "type": "array", "maxItems": 100000,
+      "items": {"$ref": "#/$defs/job"}
+    },
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "assetSelection": {"$ref": "#/$defs/assetSelection"},
+    "candidateRouteSelected": {"const": false},
+    "candidateRouteAdopted": {"const": false},
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planningSeconds", "executionSeconds", "wallSeconds"],
+      "properties": {
+        "planningSeconds": {"$ref": "#/$defs/seconds"},
+        "executionSeconds": {"$ref": "#/$defs/seconds"},
+        "wallSeconds": {"$ref": "#/$defs/seconds"}
+      }
+    },
+    "operationStack": {"$ref": "#/$defs/operationStack"}
+  }
+}

@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.op_stack.v2.schema.json",
+  "title": "SKRTG Operation System v2 candidate configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "candidate", "execution", "goalSeeds", "operations"],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9_]{1,128}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 256},
+    "number": {"type": "number"},
+    "nonNegative": {"type": "number", "minimum": 0},
+    "positive": {"type": "number", "exclusiveMinimum": 0},
+    "alpha": {"type": "number", "minimum": 0, "maximum": 1},
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/number"}
+    },
+    "quat": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/number"}
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translationCm", "rotation", "scale"],
+      "properties": {
+        "translationCm": {"$ref": "#/$defs/vec3"},
+        "rotation": {"$ref": "#/$defs/quat"},
+        "scale": {"$ref": "#/$defs/vec3"}
+      }
+    },
+    "goalSeed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "targetBone"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "targetBone": {"$ref": "#/$defs/name"}
+      }
+    },
+    "weaponBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "goalName", "anchorSkeleton", "anchorBone"],
+      "properties": {
+        "label": {"$ref": "#/$defs/name"},
+        "goalName": {"$ref": "#/$defs/name"},
+        "anchorSkeleton": {"enum": ["source", "target"]},
+        "anchorBone": {"$ref": "#/$defs/name"},
+        "targetGoalBone": {"$ref": "#/$defs/name"},
+        "anchorOffset": {"$ref": "#/$defs/transform"},
+        "maintainInputOffset": {"type": "boolean"},
+        "translationAlpha": {"$ref": "#/$defs/alpha"},
+        "rotationAlpha": {"$ref": "#/$defs/alpha"}
+      }
+    },
+    "strideGoal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goalName", "sideSign"],
+      "properties": {
+        "goalName": {"$ref": "#/$defs/name"},
+        "sideSign": {"type": "integer", "minimum": -1, "maximum": 1},
+        "alpha": {"$ref": "#/$defs/alpha"}
+      }
+    },
+    "contactFoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "sourceContactBone", "goalName"],
+      "properties": {
+        "label": {"$ref": "#/$defs/name"},
+        "sourceContactBone": {"$ref": "#/$defs/name"},
+        "sourceContactPointLocalCm": {"$ref": "#/$defs/vec3"},
+        "goalName": {"$ref": "#/$defs/name"},
+        "translationAlpha": {"$ref": "#/$defs/alpha"},
+        "rotationAlpha": {"$ref": "#/$defs/alpha"}
+      }
+    },
+    "floorGoal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goalName"],
+      "properties": {
+        "goalName": {"$ref": "#/$defs/name"},
+        "clearanceCm": {"$ref": "#/$defs/nonNegative"},
+        "translationAlpha": {"$ref": "#/$defs/alpha"},
+        "rotationAlpha": {"$ref": "#/$defs/alpha"},
+        "footprintPointsLocalCm": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/vec3"}
+        }
+      }
+    },
+    "solverBinding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "goalName", "mode", "targetChainBones"],
+          "properties": {
+            "label": {"$ref": "#/$defs/name"},
+            "goalName": {"$ref": "#/$defs/name"},
+            "mode": {"const": "two_bone"},
+            "targetChainBones": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {"$ref": "#/$defs/name"}
+            },
+            "targetPoleBone": {"$ref": "#/$defs/name"},
+            "poleGoalName": {"type": "string", "maxLength": 256},
+            "poleFallbackOffsetModelCm": {"$ref": "#/$defs/vec3"},
+            "applyGoalTranslation": {"const": true},
+            "applyGoalRotation": {"type": "boolean"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "goalName", "mode", "targetBone"],
+          "properties": {
+            "label": {"$ref": "#/$defs/name"},
+            "goalName": {"$ref": "#/$defs/name"},
+            "mode": {"const": "direct_bone"},
+            "targetBone": {"$ref": "#/$defs/name"},
+            "applyGoalTranslation": {"type": "boolean"},
+            "applyGoalRotation": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "weaponOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "type", "enabled", "settings"],
+      "properties": {
+        "instanceId": {"$ref": "#/$defs/id"},
+        "type": {"const": "weapon_goals_exact_name_v1"},
+        "enabled": {"type": "boolean"},
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bindings"],
+          "properties": {
+            "bindings": {
+              "type": "array", "minItems": 1, "maxItems": 256,
+              "items": {"$ref": "#/$defs/weaponBinding"}
+            }
+          }
+        }
+      }
+    },
+    "strideOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "type", "enabled", "settings"],
+      "properties": {
+        "instanceId": {"$ref": "#/$defs/id"},
+        "type": {"const": "stride_warping_goal_space_v1"},
+        "enabled": {"type": "boolean"},
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targetPivotBone", "forwardAxisLocal", "upAxisLocal", "goals"],
+          "properties": {
+            "targetPivotBone": {"$ref": "#/$defs/name"},
+            "forwardAxisLocal": {"$ref": "#/$defs/vec3"},
+            "upAxisLocal": {"$ref": "#/$defs/vec3"},
+            "rotateAxesWithPivot": {"type": "boolean"},
+            "warpForwards": {"$ref": "#/$defs/nonNegative"},
+            "warpSplay": {"$ref": "#/$defs/nonNegative"},
+            "sidewaysOffsetCm": {"$ref": "#/$defs/number"},
+            "alpha": {"$ref": "#/$defs/alpha"},
+            "goals": {
+              "type": "array", "minItems": 1, "maxItems": 256,
+              "items": {"$ref": "#/$defs/strideGoal"}
+            }
+          }
+        }
+      }
+    },
+    "contactOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "type", "enabled", "settings"],
+      "properties": {
+        "instanceId": {"$ref": "#/$defs/id"},
+        "type": {"const": "contact_foot_plant_v2"},
+        "enabled": {"type": "boolean"},
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["groundPlaneNormalModel", "feet"],
+          "properties": {
+            "groundPlaneNormalModel": {"$ref": "#/$defs/vec3"},
+            "groundPlaneDistanceCm": {"$ref": "#/$defs/number"},
+            "enterSpeedCmPerSecond": {"$ref": "#/$defs/nonNegative"},
+            "exitSpeedCmPerSecond": {"$ref": "#/$defs/nonNegative"},
+            "enterHeightCm": {"$ref": "#/$defs/number"},
+            "exitHeightCm": {"$ref": "#/$defs/number"},
+            "enterConfirmationFrames": {"type": "integer", "minimum": 1},
+            "minimumPlantFrames": {"type": "integer", "minimum": 1},
+            "releaseBlendFrames": {"type": "integer", "minimum": 1},
+            "maximumAnchorDriftCm": {"$ref": "#/$defs/positive"},
+            "feet": {
+              "type": "array", "minItems": 1, "maxItems": 256,
+              "items": {"$ref": "#/$defs/contactFoot"}
+            }
+          }
+        }
+      }
+    },
+    "floorOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "type", "enabled", "settings"],
+      "properties": {
+        "instanceId": {"$ref": "#/$defs/id"},
+        "type": {"const": "ground_floor_constraint_explicit_plane_v1"},
+        "enabled": {"type": "boolean"},
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["planeNormalModel", "goalUpAxisLocal", "goals"],
+          "properties": {
+            "planeNormalModel": {"$ref": "#/$defs/vec3"},
+            "planeDistanceCm": {"$ref": "#/$defs/number"},
+            "goalUpAxisLocal": {"$ref": "#/$defs/vec3"},
+            "goals": {
+              "type": "array", "minItems": 1, "maxItems": 256,
+              "items": {"$ref": "#/$defs/floorGoal"}
+            }
+          }
+        }
+      }
+    },
+    "solverOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "type", "enabled", "settings"],
+      "properties": {
+        "instanceId": {"$ref": "#/$defs/id"},
+        "type": {"const": "unified_goal_solver_v1"},
+        "enabled": {"type": "boolean"},
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bindings"],
+          "properties": {
+            "solverEpsilon": {"$ref": "#/$defs/positive"},
+            "solverPositionToleranceCm": {"$ref": "#/$defs/positive"},
+            "solverLengthToleranceCm": {"$ref": "#/$defs/positive"},
+            "bindings": {
+              "type": "array", "minItems": 1, "maxItems": 256,
+              "items": {"$ref": "#/$defs/solverBinding"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema": {"const": "skrtg.op_stack.v2"},
+    "schemaVersion": {"const": 2},
+    "candidate": {"const": true},
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repeatabilityMode"],
+      "properties": {
+        "repeatabilityMode": {"enum": ["per_operator_audit", "single_pass"]}
+      }
+    },
+    "goalSeeds": {
+      "type": "array", "maxItems": 256,
+      "items": {"$ref": "#/$defs/goalSeed"}
+    },
+    "operations": {
+      "type": "array", "minItems": 1, "maxItems": 64,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/weaponOp"},
+          {"$ref": "#/$defs/strideOp"},
+          {"$ref": "#/$defs/contactOp"},
+          {"$ref": "#/$defs/floorOp"},
+          {"$ref": "#/$defs/solverOp"}
+        ]
+      }
+    }
+  }
+}

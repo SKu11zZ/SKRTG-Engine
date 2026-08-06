@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.native_viewer.batch_retarget_request.v4.schema.json",
+  "title": "SKRTG profile-backed Operation System v2 batch request v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "sourceCharacter", "targetCharacter", "animationDirectory",
+    "outputDirectory", "recursive", "animationStack",
+    "enableSpinePelvisFollow", "enableSourceMotionFootLock",
+    "executionPolicy", "tools", "operationStack", "assetSelection", "animations"
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "sha256OrEmpty": {"type": "string", "pattern": "^([A-Fa-f0-9]{64})?$"},
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restFbx", "definitionKind", "definitionFile", "alignmentRetargeterFile"],
+      "properties": {
+        "restFbx": {"type": "string", "minLength": 1},
+        "definitionKind": {"const": "ue_ik_json_v1"},
+        "definitionFile": {"type": "string", "minLength": 1},
+        "alignmentRetargeterFile": {"type": "string", "minLength": 1}
+      }
+    },
+    "operationStack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configJson", "expectedSha256", "candidate", "selected", "adopted"],
+      "properties": {
+        "configJson": {"type": "string", "minLength": 1},
+        "expectedSha256": {"$ref": "#/$defs/sha256OrEmpty"},
+        "candidate": {"const": true},
+        "selected": {"const": false},
+        "adopted": {"const": false}
+      }
+    },
+    "animation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "animationId", "label", "sourceSkeletonId", "sourceAnimationFbx",
+        "sourceAnimationSha256", "sourceAnimationGoldenJson",
+        "sourceAnimationGoldenJsonSha256", "animationStack",
+        "sourceFbxImportMode", "restFbxImportMode"
+      ],
+      "properties": {
+        "animationId": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "label": {"type": "string", "minLength": 1},
+        "sourceSkeletonId": {"type": "string", "minLength": 1},
+        "sourceAnimationFbx": {"type": "string", "minLength": 1},
+        "sourceAnimationSha256": {"$ref": "#/$defs/sha256"},
+        "sourceAnimationGoldenJson": {"type": "string", "minLength": 1},
+        "sourceAnimationGoldenJsonSha256": {"$ref": "#/$defs/sha256"},
+        "animationStack": {"type": "string"},
+        "sourceFbxImportMode": {"const": "ue5.8_exact_golden_v1"},
+        "restFbxImportMode": {"const": "ue5.8_exported_y_reflection_v1"}
+      }
+    }
+  },
+  "properties": {
+    "schema": {"const": "skrtg.native_viewer.batch_retarget_request.v4"},
+    "sourceCharacter": {"$ref": "#/$defs/character"},
+    "targetCharacter": {"$ref": "#/$defs/character"},
+    "animationDirectory": {"const": ""},
+    "outputDirectory": {"type": "string", "minLength": 1},
+    "recursive": {"const": false},
+    "animationStack": {"type": "string"},
+    "enableSpinePelvisFollow": {"const": false},
+    "enableSourceMotionFootLock": {"const": false},
+    "executionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximumConcurrentJobs", "mode", "continueAfterJobFailure"],
+      "properties": {
+        "maximumConcurrentJobs": {"const": 1},
+        "mode": {"const": "streaming_one_animation_per_worker"},
+        "continueAfterJobFailure": {"const": true}
+      }
+    },
+    "tools": {"type": "object"},
+    "operationStack": {"$ref": "#/$defs/operationStack"},
+    "assetSelection": {"type": "object"},
+    "animations": {
+      "type": "array", "minItems": 1, "maxItems": 100000,
+      "items": {"$ref": "#/$defs/animation"}
+    }
+  }
+}

@@ -94,6 +94,11 @@ struct UEFbxImportExactResult
     int BindPoseBoneCount = 0;
     int SkinClusterBoneCount = 0;
     int EvaluatorFallbackBoneCount = 0;
+    // Captured from the already imported scene so downstream callers do not
+    // need to import the same animation a second time merely to choose the
+    // strict direct-bind audit or the hash-bound Golden fallback.
+    bool HasMeshPayload = false;
+    bool HasBindPosePayload = false;
     double MaximumBindCandidateTranslationCm = 0.0;
     double MaximumBindCandidateRotationDegrees = 0.0;
     double MaximumBindCandidateScale = 0.0;

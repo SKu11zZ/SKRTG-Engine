@@ -139,6 +139,7 @@ struct ReviewClipInfo
     std::string Label;
     std::uint64_t FrameCount = 0;
     double FramesPerSecond = 0.0;
+    bool OperationStackEnabled = false;
     bool SourceMotionFootLockEnabled = false;
     bool SourceMotionFootLockSuccess = false;
     bool FootLockHasStoredPoseDelta = false;
@@ -162,6 +163,9 @@ struct ReviewScene
     std::string RouteId;
     bool RouteSelected = false;
     bool RouteAdopted = false;
+    bool OperationStackCandidateEnabled = false;
+    bool OperationStackCandidateSelected = false;
+    bool OperationStackCandidateAdopted = false;
     std::string FoundationRouteId;
     bool FoundationFrozen = true;
     // UE IK JSON snapshots are stored in UE's +X forward, +Y right,

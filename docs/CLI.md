@@ -109,7 +109,33 @@ skrtg bridge run --request .\bridge-request.json --json
 Batch remains intentionally serial (`maximumConcurrentJobs=1`) until a later
 memory and determinism gate explicitly changes that contract.
 
-New profile-backed runs write batch status v3 and Bridge status v6. Both expose
+An optional Operation System v2 program can be selected in the native Viewer
+or supplied through the request's `operationStack` object. Configured
+profile-backed jobs use Bridge request v6/status v7 and Batch request/status
+v4; jobs without it retain v5/v6-status and v3 compatibility contracts. The
+config is SHA-256-bound during preflight and remains candidate-only:
+
+```json
+"operationStack": {
+  "configJson": "./op-stack.json",
+  "expectedSha256": "",
+  "candidate": true,
+  "selected": false,
+  "adopted": false
+}
+```
+
+See [Operation System v2](OPERATION_SYSTEM_V2.md), the
+[example program](../examples/op-stack-v2.example.json), and these schemas:
+
+- [`skrtg.op_stack.v2`](../schemas/skrtg.op_stack.v2.schema.json)
+- [`retarget_bridge_request.v6`](../schemas/skrtg.native_viewer.retarget_bridge_request.v6.schema.json)
+- [`retarget_bridge_status.v7`](../schemas/skrtg.native_viewer.retarget_bridge_status.v7.schema.json)
+- [`batch_retarget_request.v4`](../schemas/skrtg.native_viewer.batch_retarget_request.v4.schema.json)
+- [`batch_retarget_status.v4`](../schemas/skrtg.native_viewer.batch_retarget_status.v4.schema.json)
+
+Profile-backed runs without an Operation config write batch status v3 and
+Bridge status v6; configured runs write v4 and v7. All expose
 measured phase timings, so an agent can distinguish preflight, Worker,
 adapter, SKRV preparation/inspection, and final verified-export copy time
 without scraping logs. The corresponding schemas are:

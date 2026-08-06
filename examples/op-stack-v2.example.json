@@ -1,0 +1,106 @@
+{
+  "schema": "skrtg.op_stack.v2",
+  "schemaVersion": 2,
+  "candidate": true,
+  "execution": {
+    "repeatabilityMode": "single_pass"
+  },
+  "goalSeeds": [
+    {"name": "left_foot_goal", "targetBone": "foot_l"},
+    {"name": "right_foot_goal", "targetBone": "foot_r"}
+  ],
+  "operations": [
+    {
+      "instanceId": "weapon_attachment_goals",
+      "type": "weapon_goals_exact_name_v1",
+      "enabled": true,
+      "settings": {
+        "bindings": [
+          {
+            "label": "left hand follows Grip",
+            "goalName": "left_hand_weapon_goal",
+            "anchorSkeleton": "source",
+            "anchorBone": "Grip",
+            "targetGoalBone": "hand_l",
+            "translationAlpha": 1.0,
+            "rotationAlpha": 1.0
+          },
+          {
+            "label": "backbone follows Handle",
+            "goalName": "backbone_weapon_goal",
+            "anchorSkeleton": "source",
+            "anchorBone": "Handle",
+            "targetGoalBone": "spine_03",
+            "maintainInputOffset": true
+          }
+        ]
+      }
+    },
+    {
+      "instanceId": "stride_warp_feet",
+      "type": "stride_warping_goal_space_v1",
+      "enabled": true,
+      "settings": {
+        "targetPivotBone": "pelvis",
+        "forwardAxisLocal": [1.0, 0.0, 0.0],
+        "upAxisLocal": [0.0, 0.0, 1.0],
+        "warpForwards": 1.0,
+        "warpSplay": 1.0,
+        "sidewaysOffsetCm": 0.0,
+        "alpha": 1.0,
+        "goals": [
+          {"goalName": "left_foot_goal", "sideSign": -1},
+          {"goalName": "right_foot_goal", "sideSign": 1}
+        ]
+      }
+    },
+    {
+      "instanceId": "contact_foot_plant",
+      "type": "contact_foot_plant_v2",
+      "enabled": true,
+      "settings": {
+        "groundPlaneNormalModel": [0.0, 0.0, 1.0],
+        "groundPlaneDistanceCm": 0.0,
+        "enterSpeedCmPerSecond": 15.0,
+        "exitSpeedCmPerSecond": 30.0,
+        "enterHeightCm": 4.0,
+        "exitHeightCm": 8.0,
+        "enterConfirmationFrames": 2,
+        "minimumPlantFrames": 2,
+        "releaseBlendFrames": 6,
+        "maximumAnchorDriftCm": 100.0,
+        "feet": [
+          {"label": "left foot", "sourceContactBone": "foot_l", "goalName": "left_foot_goal"},
+          {"label": "right foot", "sourceContactBone": "foot_r", "goalName": "right_foot_goal"}
+        ]
+      }
+    },
+    {
+      "instanceId": "explicit_floor",
+      "type": "ground_floor_constraint_explicit_plane_v1",
+      "enabled": true,
+      "settings": {
+        "planeNormalModel": [0.0, 0.0, 1.0],
+        "planeDistanceCm": 0.0,
+        "goalUpAxisLocal": [0.0, 0.0, 1.0],
+        "goals": [
+          {"goalName": "left_foot_goal", "clearanceCm": 0.0, "translationAlpha": 1.0, "rotationAlpha": 0.0},
+          {"goalName": "right_foot_goal", "clearanceCm": 0.0, "translationAlpha": 1.0, "rotationAlpha": 0.0}
+        ]
+      }
+    },
+    {
+      "instanceId": "unified_goal_writeback",
+      "type": "unified_goal_solver_v1",
+      "enabled": true,
+      "settings": {
+        "bindings": [
+          {"label": "left arm weapon", "goalName": "left_hand_weapon_goal", "mode": "two_bone", "targetChainBones": ["upperarm_l", "lowerarm_l", "hand_l"], "poleFallbackOffsetModelCm": [0.0, -100.0, 0.0]},
+          {"label": "backbone weapon rotation", "goalName": "backbone_weapon_goal", "mode": "direct_bone", "targetBone": "spine_03", "applyGoalTranslation": false, "applyGoalRotation": true},
+          {"label": "left leg", "goalName": "left_foot_goal", "mode": "two_bone", "targetChainBones": ["thigh_l", "calf_l", "foot_l"], "poleFallbackOffsetModelCm": [0.0, -100.0, 0.0]},
+          {"label": "right leg", "goalName": "right_foot_goal", "mode": "two_bone", "targetChainBones": ["thigh_r", "calf_r", "foot_r"], "poleFallbackOffsetModelCm": [0.0, 100.0, 0.0]}
+        ]
+      }
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 #include "skrtg/core/math/transform.h"
 #include "skrtg/fbx/ue_fbx_import_exact.h"
 #include "skrtg/reconciliation/rest_reconciliation.h"
+#include "skrtg/retarget/op_stack_config.h"
 
 #include <fbxsdk.h>
 #include <nlohmann/json.hpp>
@@ -34,6 +35,7 @@ namespace
 {
 using Json = nlohmann::json;
 using core::animation::PoseBuffer;
+using core::animation::PoseSpace;
 using core::math::Compose;
 using core::math::Conjugate;
 using core::math::Add;
@@ -141,6 +143,7 @@ struct OwnedFrame
     int FrameIndex = 0;
     double TimeSeconds = 0.0;
     std::vector<TransformRT> SourceModelPose;
+    std::vector<TransformRT> SourceRetargetModelPose;
     PoseBuffer TargetFkModelPose;
     PoseBuffer TargetFoundationLocalPose;
     PoseBuffer TargetFoundationModelPose;
@@ -384,6 +387,38 @@ void DestroyFbx(LoadedFbx& Loaded)
     Loaded = {};
 }
 
+bool NormalizeLoadedFbxToUEJsonAxis(
+    LoadedFbx& Loaded,
+    std::string& OutError)
+{
+    if (Loaded.Scene == nullptr)
+    {
+        OutError = "UE JSON FBX scene is null";
+        return false;
+    }
+    FbxAxisSystem UEJsonAxis;
+    if (!FbxAxisSystem::ParseAxisSystem("yzx", UEJsonAxis))
+    {
+        OutError = "failed to construct the UE JSON +X/+Y/+Z axis";
+        return false;
+    }
+    FbxSystemUnit::cm.ConvertScene(Loaded.Scene);
+    UEJsonAxis.DeepConvertScene(Loaded.Scene);
+    FbxNode* RootNode = Loaded.Scene->GetRootNode();
+    if (RootNode == nullptr)
+    {
+        OutError = "UE JSON FBX scene has no root node";
+        return false;
+    }
+    double FrameRate = FbxTime::GetFrameRate(
+        Loaded.Scene->GetGlobalSettings().GetTimeMode());
+    if (!std::isfinite(FrameRate) || FrameRate <= 0.0)
+        FrameRate = 30.0;
+    RootNode->ResetPivotSetAndConvertAnimation(
+        FrameRate, false, true, false);
+    return true;
+}
+
 bool LoadFbx(
     const std::filesystem::path& Path,
     const char* SceneName,
@@ -454,29 +489,10 @@ bool LoadFbx(
         }
         return true;
     }
-    FbxAxisSystem UEJsonAxis;
-    if (!FbxAxisSystem::ParseAxisSystem("yzx", UEJsonAxis))
-    {
-        OutError = "failed to construct the UE JSON +X/+Y/+Z axis";
-        DestroyFbx(Out);
-        return false;
-    }
-    FbxSystemUnit::cm.ConvertScene(Out.Scene);
-    UEJsonAxis.DeepConvertScene(Out.Scene);
-    FbxNode* RootNode = Out.Scene->GetRootNode();
-    if (RootNode == nullptr)
-    {
-        OutError = "UE JSON FBX scene has no root node";
-        DestroyFbx(Out);
-        return false;
-    }
-    double FrameRate = FbxTime::GetFrameRate(
-        Out.Scene->GetGlobalSettings().GetTimeMode());
-    if (!std::isfinite(FrameRate) || FrameRate <= 0.0)
-        FrameRate = 30.0;
-    RootNode->ResetPivotSetAndConvertAnimation(
-        FrameRate, false, true, false);
-    return true;
+    if (NormalizeLoadedFbxToUEJsonAxis(Out, OutError))
+        return true;
+    DestroyFbx(Out);
+    return false;
 }
 
 TransformRT ToTransformRT(const FbxAMatrix& Matrix)
@@ -748,6 +764,7 @@ bool ValidateUE58ExportedRestFbx(
     const UEIKJsonRetargetOptions& Options,
     const std::string& Label,
     RestFbxCoordinateEvidence& Out,
+    LoadedFbx& OutNormalizedScene,
     std::string& OutError)
 {
     LoadedFbx Raw;
@@ -876,7 +893,13 @@ bool ValidateUE58ExportedRestFbx(
             return false;
         }
     }
-    DestroyFbx(Raw);
+    if (!NormalizeLoadedFbxToUEJsonAxis(Raw, OutError))
+    {
+        DestroyFbx(Raw);
+        return false;
+    }
+    OutNormalizedScene = Raw;
+    Raw = {};
     return true;
 }
 
@@ -2210,7 +2233,9 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
         !std::isfinite(Options.RestScaleTolerance) ||
         Options.RestTranslationToleranceCm <= 0.0 ||
         Options.RestRotationToleranceDegrees <= 0.0 ||
-        Options.RestScaleTolerance <= 0.0)
+        Options.RestScaleTolerance <= 0.0 ||
+        (Options.OperationStackJsonPath.empty() !=
+         Options.OperationStackJsonExpectedSha256.empty()))
     {
         return Fail("worker options are incomplete or out of bounds");
     }
@@ -2240,6 +2265,14 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
             Options.SourceAnimationGoldenJsonPath,
             Options
                 .SourceAnimationGoldenJsonExpectedSha256});
+    }
+    const bool HasOperationStack =
+        !Options.OperationStackJsonPath.empty();
+    if (HasOperationStack)
+    {
+        RequestedInputs.push_back({
+            Options.OperationStackJsonPath,
+            Options.OperationStackJsonExpectedSha256});
     }
     std::vector<BoundInput> Inputs(
         RequestedInputs.size());
@@ -2350,28 +2383,36 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
              Options.SourceRestFbxPath,
              Route.SourceRig.Bones, Options,
              "source rest FBX",
-             SourceRestCoordinateEvidence, Error) ||
+             SourceRestCoordinateEvidence,
+             SourceRestScene, Error) ||
          !ValidateUE58ExportedRestFbx(
              Options.TargetRestFbxPath,
              Route.TargetRig.Bones, Options,
              "target rest FBX",
-             TargetRestCoordinateEvidence, Error)))
+             TargetRestCoordinateEvidence,
+             TargetRestScene, Error)))
     {
         return Fail(Error);
     }
 
-    if (!LoadFbx(
+    const bool ExactSourceRequiresDirectBindAudit =
+        UseExactSourceImport &&
+        (ExactSourceClip.HasMeshPayload ||
+         ExactSourceClip.HasBindPosePayload);
+    if ((!UseUE58ExportedRestImport && !LoadFbx(
             Options.SourceRestFbxPath,
             "SKRTG_UEIK_source_rest",
-            SourceRestScene, Error, true) ||
-        !LoadFbx(
-            Options.SourceAnimationFbxPath,
-            "SKRTG_UEIK_source_animation",
-            SourceAnimationScene, Error, true) ||
-        !LoadFbx(
+            SourceRestScene, Error, true)) ||
+        ((!UseExactSourceImport ||
+          ExactSourceRequiresDirectBindAudit) &&
+         !LoadFbx(
+             Options.SourceAnimationFbxPath,
+             "SKRTG_UEIK_source_animation",
+             SourceAnimationScene, Error, true)) ||
+        (!UseUE58ExportedRestImport && !LoadFbx(
             Options.TargetRestFbxPath,
             "SKRTG_UEIK_target_rest",
-            TargetRestScene, Error, true))
+            TargetRestScene, Error, true)))
     {
         return Fail(Error);
     }
@@ -2382,9 +2423,11 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
     if (!BindSkeleton(
             SourceRestScene.Scene, Route.SourceRig.Bones,
             SourceRest, Error) ||
-        !BindSkeleton(
-            SourceAnimationScene.Scene, Route.SourceRig.Bones,
-            SourceAnimation, Error) ||
+        ((!UseExactSourceImport ||
+          ExactSourceRequiresDirectBindAudit) &&
+         !BindSkeleton(
+             SourceAnimationScene.Scene, Route.SourceRig.Bones,
+             SourceAnimation, Error)) ||
         !BindSkeleton(
             TargetRestScene.Scene, Route.TargetRig.Bones,
             TargetRest, Error))
@@ -2519,9 +2562,7 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
         {
             return Fail(Error);
         }
-        if (SceneRequiresDirectAnimationBindAudit(
-                SourceAnimationScene.Scene,
-                SourceAnimation))
+        if (ExactSourceRequiresDirectBindAudit)
         {
             if (!BuildAnimationBindModel(
                     SourceAnimationScene.Scene,
@@ -2733,6 +2774,8 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
         // evaluated model space.  The reconciled UE Retarget Pose is used
         // only as solver input and must not be paired with FBX bind offsets.
         Frame.SourceModelPose = std::move(RawSourceModel);
+        Frame.SourceRetargetModelPose =
+            std::move(SourceRetargetModel);
         Frame.TargetFkModelPose =
             std::move(Solved.TargetFkModelPose);
         Frame.TargetFoundationLocalPose =
@@ -2750,6 +2793,120 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
         Frames.push_back(std::move(Frame));
     }
 
+    bool OperationStackExecuted = false;
+    bool OperationStackChangedFinal = false;
+    std::string OperationStackRepeatabilityMode = "not_configured";
+    Json OperationStackStages = Json::array();
+    if (HasOperationStack)
+    {
+        const core::skeleton::NormalizedRuntimeSkeleton SourceRuntime =
+            retarget::BuildSourceRuntimeSkeleton(Route);
+        const core::skeleton::NormalizedRuntimeSkeleton TargetRuntime =
+            retarget::BuildTargetRuntimeSkeleton(Route);
+        retarget::RetargetOpClip OpClip;
+        OpClip.Frames.reserve(Frames.size());
+        for (const OwnedFrame& Frame : Frames)
+        {
+            if (Frame.SourceRetargetModelPose.size() !=
+                    SourceRuntime.BoneCount())
+            {
+                return Fail(
+                    "Operation System source pose does not match the exact source runtime skeleton");
+            }
+            retarget::RetargetOpFrame OpFrame;
+            OpFrame.FrameIndex = Frame.FrameIndex;
+            OpFrame.TimeSeconds = Frame.TimeSeconds;
+            OpFrame.SourceModelPose = PoseBuffer(
+                PoseSpace::Model,
+                SourceRuntime.GetIdentity().HierarchyHash);
+            OpFrame.SourceModelPose.ResizeToSkeleton(SourceRuntime);
+            for (std::size_t BoneIndex = 0;
+                 BoneIndex < SourceRuntime.BoneCount(); ++BoneIndex)
+            {
+                OpFrame.SourceModelPose[BoneIndex] =
+                    Frame.SourceRetargetModelPose[BoneIndex];
+            }
+            OpFrame.TargetLocalPose =
+                Frame.TargetFoundationLocalPose;
+            OpFrame.TargetModelPose =
+                Frame.TargetFoundationModelPose;
+            OpClip.Frames.push_back(std::move(OpFrame));
+        }
+        retarget::RetargetOpProgramLoadResult ProgramLoad =
+            retarget::LoadRetargetOpProgram(
+                Options.OperationStackJsonPath,
+                SourceRuntime, TargetRuntime);
+        if (!ProgramLoad.Success || !ProgramLoad.Program)
+        {
+            return Fail(
+                ProgramLoad.Errors.empty()
+                ? "Operation System v2 program load failed"
+                : ProgramLoad.Errors.front());
+        }
+        OperationStackRepeatabilityMode = retarget::ToString(
+            ProgramLoad.Program->RunOptions.RepeatabilityMode);
+        if (!retarget::SeedRetargetOpGoals(
+                TargetRuntime, ProgramLoad.Program->GoalSeeds,
+                OpClip, Error))
+        {
+            return Fail("Operation System v2 goal seeding failed: " + Error);
+        }
+        const retarget::RetargetOpStackRunResult OpRun =
+            ProgramLoad.Program->Stack.Run(
+                SourceRuntime, TargetRuntime, OpClip,
+                ProgramLoad.Program->RunOptions);
+        if (!OpRun.Success)
+        {
+            return Fail(
+                OpRun.Errors.empty()
+                ? "Operation System v2 failed bounded execution"
+                : OpRun.Errors.front());
+        }
+        OperationStackExecuted = std::any_of(
+            OpRun.Stages.begin(), OpRun.Stages.end(),
+            [](const retarget::RetargetOpStackStageResult& Stage)
+            {
+                return Stage.Executed;
+            });
+        OperationStackChangedFinal =
+            !retarget::EquivalentRetargetOpClips(
+                OpClip, OpRun.FinalOutput);
+        for (const retarget::RetargetOpStackStageResult& Stage :
+             OpRun.Stages)
+        {
+            OperationStackStages.push_back({
+                {"instanceId", Stage.InstanceId},
+                {"type", Stage.TypeId},
+                {"version", Stage.Version},
+                {"phase", retarget::ToString(Stage.Phase)},
+                {"enabled", Stage.Enabled},
+                {"executed", Stage.Executed},
+                {"preflightPassed", Stage.PreflightPassed},
+                {"success", Stage.Success},
+                {"disabledExactPassthrough",
+                 Stage.DisabledExactPassthrough},
+                {"mutationWithinDeclaredChannels",
+                 Stage.MutationWithinDeclaredChannels},
+                {"outputModelsRebuilt", Stage.OutputModelsRebuilt},
+                {"repeatabilityCheckPerformed",
+                 Stage.RepeatabilityCheckPerformed},
+                {"deterministicRepeatabilityVerified",
+                 Stage.DeterministicRepeatabilityVerified},
+                {"warnings", Stage.Warnings},
+                {"errors", Stage.Errors}});
+        }
+        if (OpRun.FinalOutput.Frames.size() != Frames.size())
+            return Fail("Operation System v2 changed the frame inventory");
+        for (std::size_t FrameIndex = 0;
+             FrameIndex < Frames.size(); ++FrameIndex)
+        {
+            Frames[FrameIndex].TargetFinalLocalPose =
+                OpRun.FinalOutput.Frames[FrameIndex].TargetLocalPose;
+            Frames[FrameIndex].TargetFinalModelPose =
+                OpRun.FinalOutput.Frames[FrameIndex].TargetModelPose;
+        }
+    }
+
     std::vector<RetargetReviewChain> ReviewChains;
     std::set<int> SourceIkIndices;
     std::set<int> TargetIkIndices;
@@ -2760,8 +2917,10 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
         return Fail(Error);
     }
     const bool SourceAnimationHasMesh =
-        SceneContainsMesh(
-            SourceAnimationScene.Scene->GetRootNode());
+        UseExactSourceImport
+        ? ExactSourceClip.HasMeshPayload
+        : SceneContainsMesh(
+              SourceAnimationScene.Scene->GetRootNode());
     const BoundSkeleton& SourceDisplayPaths =
         SourceAnimationHasMesh ? SourceAnimation : SourceRest;
 
@@ -2784,6 +2943,9 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
     Review.SourceMotionFootLockCandidateEnabled = false;
     Review.SourceMotionFootLockCandidateSelected = false;
     Review.SourceMotionFootLockCandidateAdopted = false;
+    Review.OperationStackCandidateEnabled = OperationStackExecuted;
+    Review.OperationStackCandidateSelected = false;
+    Review.OperationStackCandidateAdopted = false;
     Review.NormalizeFbxToUEJsonSpace = true;
     Review.AllowSharedSourceMeshFallbackForMeshlessClips = true;
     Review.SourceBones = BuildReviewBones(
@@ -2856,6 +3018,7 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
     Clip.LimbIkMaximumEndpointErrorCm =
         MaximumEndpointErrorCm;
     Clip.LimbIkMaximumShadowToRealPositionDeltaCm = 0.0;
+    Clip.OperationStackEnabled = OperationStackExecuted;
     Clip.SourceMotionFootLockEnabled = false;
     Clip.FoundationExportFbxFileName =
         Options.FoundationExportFbxFileName;
@@ -2920,6 +3083,35 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
     Provenance["mappedChainCount"] = Route.ChainPairs.size();
     Provenance["appliedIkChainRecords"] =
         AppliedIkChainRecords;
+    Provenance["importReuse"] = {
+        {"sourceRestSceneReusedAfterCoordinateValidation",
+         UseUE58ExportedRestImport},
+        {"targetRestSceneReusedAfterCoordinateValidation",
+         UseUE58ExportedRestImport},
+        {"sourceAnimationSecondImportSkipped",
+         UseExactSourceImport &&
+             !ExactSourceRequiresDirectBindAudit},
+        {"sourceAnimationHasMeshPayload",
+         UseExactSourceImport && ExactSourceClip.HasMeshPayload},
+        {"sourceAnimationHasBindPosePayload",
+         UseExactSourceImport && ExactSourceClip.HasBindPosePayload},
+        {"workerProcessSharedAcrossBatch", false}};
+    Provenance["operationStack"] = {
+        {"schema", "skrtg.op_stack.v2"},
+        {"configured", HasOperationStack},
+        {"candidate", HasOperationStack},
+        {"selected", false},
+        {"adopted", false},
+        {"executed", OperationStackExecuted},
+        {"changedFinal", OperationStackChangedFinal},
+        {"repeatabilityMode", OperationStackRepeatabilityMode},
+        {"configPath", HasOperationStack
+            ? Options.OperationStackJsonPath.string()
+            : std::string()},
+        {"configSha256", HasOperationStack
+            ? Inputs.back().Sha256
+            : std::string()},
+        {"stages", OperationStackStages}};
     Provenance["solverParity"] = {
         {"ueFKScheduling",
          "candidate_implementation_of_ue_5_8_fk_chains_op_interpolated_translation_none"},

@@ -51,6 +51,8 @@ void PrintHelp()
            " [--source-animation-golden-sha256 <sha256>]"
            " --target-rest-fbx <target_rest.fbx>"
            " --target-rest-sha256 <sha256>"
+           " [--op-stack-json <candidate.skrtgops.json>]"
+           " [--op-stack-sha256 <sha256>]"
            " --out-dir <artifact_root>"
            " [--animation-stack <exact_name>]"
            " [--clip-id <id>]"
@@ -59,8 +61,9 @@ void PrintHelp()
            " [--foundation-export-fbx <file.fbx>]"
            " [--export-fbx <file.fbx>]\n\n"
         << "The worker reads exported UE JSON only. It does not read "
-           "uasset files, infer mappings, select/adopt a route, or enable "
-           "FootLock.\n";
+           "uasset files, infer mappings, or select/adopt a route. Optional "
+           "Operation System v2 programs are exact-name, hash-bound, and "
+           "candidate-only.\n";
 }
 } // namespace
 
@@ -238,6 +241,18 @@ int main(int argc, char** argv)
                 return 2;
             Options.TargetRestFbxExpectedSha256 = *Value;
         }
+        else if (Argument == "--op-stack-json")
+        {
+            if ((Value = RequireValue(Index, Argument)) == nullptr)
+                return 2;
+            Options.OperationStackJsonPath = *Value;
+        }
+        else if (Argument == "--op-stack-sha256")
+        {
+            if ((Value = RequireValue(Index, Argument)) == nullptr)
+                return 2;
+            Options.OperationStackJsonExpectedSha256 = *Value;
+        }
         else if (Argument == "--out-dir")
         {
             if ((Value = RequireValue(Index, Argument)) == nullptr)
@@ -310,6 +325,8 @@ int main(int argc, char** argv)
         Options.TargetRestFbxPath.empty() ||
         Options.TargetRestFbxExpectedSha256.empty() ||
         Options.OutputDirectory.empty() ||
+        (Options.OperationStackJsonPath.empty() !=
+         Options.OperationStackJsonExpectedSha256.empty()) ||
         (Options.SourceFbxImportMode ==
              skrtg::fbx::UEIKSourceFbxImportMode::
                  UE58ExactGoldenV1 &&

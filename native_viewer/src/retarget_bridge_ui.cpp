@@ -42,6 +42,7 @@ enum class BrowseTarget
     TargetRigJson,
     SourceAlignmentRetargeterJson,
     TargetAlignmentRetargeterJson,
+    OperationStackJson,
     OutputRoot,
     BatchAnimationDirectory,
     BatchOutputRoot,
@@ -68,6 +69,7 @@ struct PathBuffers
     std::array<char, PathCapacity> TargetRigJson{};
     std::array<char, PathCapacity> SourceAlignmentRetargeterJson{};
     std::array<char, PathCapacity> TargetAlignmentRetargeterJson{};
+    std::array<char, PathCapacity> OperationStackJson{};
     std::array<char, PathCapacity> AnimationStack{};
     std::array<char, PathCapacity> OutputRoot{};
     std::array<char, PathCapacity> BatchAnimationDirectory{};
@@ -215,6 +217,8 @@ std::array<char, PathCapacity>& BufferFor(
         return Buffers.SourceAlignmentRetargeterJson;
     case BrowseTarget::TargetAlignmentRetargeterJson:
         return Buffers.TargetAlignmentRetargeterJson;
+    case BrowseTarget::OperationStackJson:
+        return Buffers.OperationStackJson;
     case BrowseTarget::OutputRoot: return Buffers.OutputRoot;
     case BrowseTarget::BatchAnimationDirectory:
         return Buffers.BatchAnimationDirectory;
@@ -504,6 +508,7 @@ struct RetargetBridgeUi::Impl
         SetBuffer(Buffers.TargetRigJson, {});
         SetBuffer(Buffers.SourceAlignmentRetargeterJson, {});
         SetBuffer(Buffers.TargetAlignmentRetargeterJson, {});
+        SetBuffer(Buffers.OperationStackJson, {});
         SetBuffer(Buffers.AnimationStack, {});
         SetBuffer(Buffers.CharacterProfilePackage, {});
 
@@ -928,6 +933,12 @@ struct RetargetBridgeUi::Impl
             !UseUEIKJsonRoute && SpinePelvisFollow;
         Request.EnableSourceMotionFootLock =
             !UseUEIKJsonRoute && SourceMotionFootLock;
+        if (UseUEIKJsonRoute)
+        {
+            Request.OperationStackJson =
+                BufferPath(Buffers.OperationStackJson)
+                    .lexically_normal();
+        }
         return Request;
     }
 
@@ -1131,6 +1142,12 @@ struct RetargetBridgeUi::Impl
             !UseUEIKJsonRoute && SpinePelvisFollow;
         Request.EnableSourceMotionFootLock =
             !UseUEIKJsonRoute && SourceMotionFootLock;
+        if (UseUEIKJsonRoute)
+        {
+            Request.OperationStackJson =
+                BufferPath(Buffers.OperationStackJson)
+                    .lexically_normal();
+        }
         return Request;
     }
 
@@ -1232,6 +1249,14 @@ struct RetargetBridgeUi::Impl
                 LastBatchRequest.AnimationDirectory;
             LastBatchStatus.OutputDirectory =
                 LastBatchRequest.OutputDirectory;
+            LastBatchStatus.OperationStackJson =
+                LastBatchRequest.OperationStackJson;
+            if (!LastBatchPlan.Preflights.empty())
+            {
+                LastBatchStatus.OperationStackJsonSha256 =
+                    LastBatchPlan.Preflights.front()
+                        .OperationStackJsonSha256;
+            }
             LastBatchStatus.Recursive = LastBatchRequest.Recursive;
             LastBatchStatus.EnableSpinePelvisFollow =
                 LastBatchRequest.EnableSpinePelvisFollow;
@@ -1791,14 +1816,17 @@ void RetargetBridgeUi::Draw()
                 ImGui::TextColored(
                     {0.95F, 0.76F, 0.35F, 1.0F},
                     "当前 IK Rig 导出声明 FullBodyIK；本候选仅为独立解析式双骨骼近似，不声明 UE FullBodyIK 等价。");
-                bool DisabledOp = false;
-                ImGui::BeginDisabled(true);
-                ImGui::Checkbox(
-                    "Spine / Pelvis 跟随（此候选路线关闭）",
-                    &DisabledOp);
-                ImGui::Checkbox(
-                    "脚锁定（此候选路线关闭）", &DisabledOp);
-                ImGui::EndDisabled();
+                DrawPathRow(
+                    "Operation System v2 配置 JSON（可选）",
+                    "##OperationStackJson",
+                    State->Buffers.OperationStackJson,
+                    State->Browser,
+                    BrowseTarget::OperationStackJson,
+                    BrowseSelection::JsonFile);
+                if (ImGui::SmallButton("清空 Op 配置##SingleClearOps"))
+                    State->Buffers.OperationStackJson.fill('\0');
+                ImGui::TextWrapped(
+                    "配置可按阶段启用 Weapon Goals、Stride Warping、Contact Foot Plant v2、Ground/Floor Constraint，并由 Unified Goal Solver 统一写回。骨名和 Goal 名严格匹配；候选状态不会自动变成 adopted。");
             }
             else
             {
@@ -2097,16 +2125,17 @@ void RetargetBridgeUi::Draw()
             ImGui::EndDisabled();
             if (State->UseUEIKJsonRoute)
             {
-                bool DisabledOp = false;
-                ImGui::BeginDisabled(true);
-                ImGui::Checkbox(
-                    "Spine / Pelvis 跟随（此候选路线关闭）"
-                    "##BatchSpinePelvisDisabled",
-                    &DisabledOp);
-                ImGui::Checkbox(
-                    "脚锁定（此候选路线关闭）##BatchFootLockDisabled",
-                    &DisabledOp);
-                ImGui::EndDisabled();
+                DrawPathRow(
+                    "Operation System v2 配置 JSON（整批共用）",
+                    "##BatchOperationStackJson",
+                    State->Buffers.OperationStackJson,
+                    State->Browser,
+                    BrowseTarget::OperationStackJson,
+                    BrowseSelection::JsonFile);
+                if (ImGui::SmallButton("清空 Op 配置##BatchClearOps"))
+                    State->Buffers.OperationStackJson.fill('\0');
+                ImGui::TextWrapped(
+                    "整批复用同一份哈希绑定配置与预检缓存；每个 Worker 仍独立重新校验输入。四类新 Op 默认关闭，仅执行 JSON 中显式 enabled 的条目。");
             }
             else
             {
@@ -2143,7 +2172,7 @@ void RetargetBridgeUi::Draw()
             }
             ImGui::SameLine();
             ImGui::TextDisabled(
-                "低内存流式模式 | 并发固定 1 | 不读取 XML/uasset");
+                "低内存流式模式 | 整批预检缓存 | 并发固定 1 | 不读取 uasset");
 
             if (!State->BatchMessage.empty())
                 ImGui::TextWrapped("%s", State->BatchMessage.c_str());

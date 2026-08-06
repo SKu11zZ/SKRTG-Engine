@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SKu11zZ/SKRTG-Engine/schemas/skrtg.native_viewer.retarget_bridge_request.v6.schema.json",
+  "title": "SKRTG Operation System v2 retarget Bridge request v6",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "sourceAnimationFbx", "targetSkeletonFbx", "sourceRestFbx",
+    "outputDirectory", "clipId", "clipLabel", "enableSpinePelvisFollow",
+    "enableSourceMotionFootLock", "tools", "routeKind", "animationStack",
+    "ueIkJson", "ueFbxImport", "operationStack"
+  ],
+  "$defs": {
+    "sha256OrEmpty": {"type": "string", "pattern": "^([A-Fa-f0-9]{64})?$"},
+    "operationStack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configJson", "expectedSha256", "candidate", "selected", "adopted"],
+      "properties": {
+        "configJson": {"type": "string", "minLength": 1},
+        "expectedSha256": {"$ref": "#/$defs/sha256OrEmpty"},
+        "candidate": {"const": true},
+        "selected": {"const": false},
+        "adopted": {"const": false}
+      }
+    }
+  },
+  "properties": {
+    "schema": {"const": "skrtg.native_viewer.retarget_bridge_request.v6"},
+    "sourceAnimationFbx": {"type": "string", "minLength": 1},
+    "targetSkeletonFbx": {"type": "string", "minLength": 1},
+    "sourceRestFbx": {"type": "string", "minLength": 1},
+    "outputDirectory": {"type": "string", "minLength": 1},
+    "clipId": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "clipLabel": {"type": "string", "minLength": 1},
+    "enableSpinePelvisFollow": {"const": false},
+    "enableSourceMotionFootLock": {"const": false},
+    "routeKind": {"const": "ue_ik_json_v1"},
+    "animationStack": {"type": "string"},
+    "tools": {
+      "type": "object",
+      "required": ["bridgeExecutable", "ueIkRetargeterExecutable", "nodeExecutable", "adapterScript", "skrvPackExecutable"],
+      "properties": {
+        "bridgeExecutable": {"type": "string"},
+        "retargeterExecutable": {"type": "string"},
+        "ueIkRetargeterExecutable": {"type": "string", "minLength": 1},
+        "nodeExecutable": {"type": "string", "minLength": 1},
+        "adapterScript": {"type": "string", "minLength": 1},
+        "skrvPackExecutable": {"type": "string", "minLength": 1},
+        "canonicalJson": {"type": "string"},
+        "defaultSourceRestFbx": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "ueIkJson": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRigJson", "targetRigJson", "sourceAlignmentRetargeterJson", "targetAlignmentRetargeterJson"],
+      "properties": {
+        "sourceRigJson": {"type": "string", "minLength": 1},
+        "targetRigJson": {"type": "string", "minLength": 1},
+        "sourceAlignmentRetargeterJson": {"type": "string", "minLength": 1},
+        "targetAlignmentRetargeterJson": {"type": "string", "minLength": 1}
+      }
+    },
+    "ueFbxImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceAnimationMode", "restMode", "sourceAnimationGoldenJson"],
+      "properties": {
+        "sourceAnimationMode": {"const": "ue5.8_exact_golden_v1"},
+        "restMode": {"const": "ue5.8_exported_y_reflection_v1"},
+        "sourceAnimationGoldenJson": {"type": "string", "minLength": 1}
+      }
+    },
+    "assetSelection": {"type": "object"},
+    "operationStack": {"$ref": "#/$defs/operationStack"}
+  }
+}

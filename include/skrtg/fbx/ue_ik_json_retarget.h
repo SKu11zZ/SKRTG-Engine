@@ -42,6 +42,12 @@ struct UEIKJsonRetargetOptions
     std::filesystem::path TargetRestFbxPath;
     std::string TargetRestFbxExpectedSha256;
 
+    // Optional, hash-bound candidate Operation System v2 program. Absence
+    // means exact Foundation passthrough. Loading never selects or adopts an
+    // algorithm route.
+    std::filesystem::path OperationStackJsonPath;
+    std::string OperationStackJsonExpectedSha256;
+
     std::filesystem::path OutputDirectory;
     std::string AnimationStackName;
     std::string ClipId = "ue_ik_json_clip";

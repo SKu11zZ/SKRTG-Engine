@@ -23,8 +23,11 @@ using skrtg::retarget::RetargetOpBoneWriteMask;
 using skrtg::retarget::RetargetOpClip;
 using skrtg::retarget::RetargetOpDescriptor;
 using skrtg::retarget::RetargetOpFrame;
+using skrtg::retarget::RetargetOpPhase;
+using skrtg::retarget::RetargetOpRepeatabilityMode;
 using skrtg::retarget::RetargetOpRunResult;
 using skrtg::retarget::RetargetOpStack;
+using skrtg::retarget::RetargetOpStackRunOptions;
 
 int Failures = 0;
 
@@ -241,6 +244,47 @@ private:
     int RunCount = 0;
 };
 
+class CountingPhaseOp final : public IRetargetOp
+{
+public:
+    CountingPhaseOp(RetargetOpPhase PhaseValue, int& CounterValue)
+        : Phase(PhaseValue), Counter(CounterValue)
+    {
+    }
+
+    RetargetOpDescriptor Descriptor() const override
+    {
+        RetargetOpDescriptor Result;
+        Result.TypeId = Phase == RetargetOpPhase::GoalGeneration
+            ? "synthetic_goal_generation_v1"
+            : "synthetic_goal_warp_v1";
+        Result.Version = 1;
+        Result.DisplayName = "Synthetic Phase Op";
+        Result.Phase = Phase;
+        return Result;
+    }
+
+    RetargetOpRunResult Run(
+        const NormalizedRuntimeSkeleton&,
+        const NormalizedRuntimeSkeleton&,
+        const RetargetOpClip& Input) override
+    {
+        ++Counter;
+        RetargetOpRunResult Result;
+        Result.Success = true;
+        Result.InputImmutable = true;
+        Result.OutputModelsRebuilt = true;
+        Result.MutationWithinDeclaredChannels = true;
+        Result.RouteId = Descriptor().TypeId;
+        Result.Output = Input;
+        return Result;
+    }
+
+private:
+    RetargetOpPhase Phase;
+    int& Counter;
+};
+
 void TestDisabledExactPassthrough()
 {
     const auto Source = MakeSkeleton("source");
@@ -338,6 +382,56 @@ void TestNonDeterministicOperatorRejected()
               EquivalentRetargetOpClips(Foundation, Run.FinalOutput),
           "non-deterministic operator escaped OpStack fail-closed policy");
 }
+
+void TestSinglePassExecutesExactlyOnce()
+{
+    const auto Source = MakeSkeleton("source-single-pass");
+    const auto Target = MakeSkeleton("target-single-pass");
+    const RetargetOpClip Foundation = MakeClip(Source, Target);
+    int RunCount = 0;
+    RetargetOpStack Stack;
+    Check(Stack.Add(
+              "single_pass",
+              std::make_unique<CountingPhaseOp>(
+                  RetargetOpPhase::GoalGeneration, RunCount), true),
+          "single-pass op could not be added");
+    RetargetOpStackRunOptions Options;
+    Options.RepeatabilityMode = RetargetOpRepeatabilityMode::SinglePass;
+    const auto Run = Stack.Run(Source, Target, Foundation, Options);
+    Check(Run.Success && RunCount == 1 && Run.Stages.size() == 1 &&
+              Run.Stages[0].Executed &&
+              !Run.Stages[0].RepeatabilityCheckPerformed &&
+              !Run.Stages[0].DeterministicRepeatabilityVerified,
+          "single-pass mode did not execute exactly once or fabricated audit state");
+}
+
+void TestPhaseOrderingFailsClosed()
+{
+    const auto Source = MakeSkeleton("source-phase-order");
+    const auto Target = MakeSkeleton("target-phase-order");
+    const RetargetOpClip Foundation = MakeClip(Source, Target);
+    int WarpRuns = 0;
+    int GenerationRuns = 0;
+    RetargetOpStack Stack;
+    Check(Stack.Add(
+              "warp_first",
+              std::make_unique<CountingPhaseOp>(
+                  RetargetOpPhase::GoalWarp, WarpRuns), true),
+          "warp phase op could not be added");
+    Check(Stack.Add(
+              "generation_late",
+              std::make_unique<CountingPhaseOp>(
+                  RetargetOpPhase::GoalGeneration, GenerationRuns), true),
+          "late generation op could not be added");
+    RetargetOpStackRunOptions Options;
+    Options.RepeatabilityMode = RetargetOpRepeatabilityMode::SinglePass;
+    const auto Run = Stack.Run(Source, Target, Foundation, Options);
+    Check(!Run.Success && WarpRuns == 1 && GenerationRuns == 0 &&
+              Run.Stages.size() == 2 && !Run.Stages[1].Executed &&
+              EquivalentRetargetOpClips(
+                  Foundation, Run.FinalOutput),
+          "out-of-order phases did not fail closed before execution");
+}
 } // namespace
 
 int main()
@@ -347,12 +441,14 @@ int main()
     TestDeclaredScopeAndOrdering();
     TestUndeclaredMutationRejected();
     TestNonDeterministicOperatorRejected();
+    TestSinglePassExecutesExactlyOnce();
+    TestPhaseOrderingFailsClosed();
     if (Failures != 0)
     {
         std::cerr << "retarget_op_stack_tests failed: "
                   << Failures << " failure(s)\n";
         return EXIT_FAILURE;
     }
-    std::cout << "retarget_op_stack_tests passed: 5 contract groups\n";
+    std::cout << "retarget_op_stack_tests passed: 7 contract groups\n";
     return EXIT_SUCCESS;
 }

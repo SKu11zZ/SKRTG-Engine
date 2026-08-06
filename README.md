@@ -65,6 +65,7 @@ SKRTG 关心的不是配置由哪个软件生成，而是信息是否明确：�
 - 为每段动画生成独立的目标 FBX 和 SKRV v1 审阅包。
 - 在原生 Viewer 的 Original、FK、Foundation、Final 四个同步视图中检查结果，并在同一批结果里切换动画。
 - 对输入 Profile、Catalog、FBX、Golden JSON 和输出文件做 SHA-256 绑定与复核。
+- 可选加载 `skrtg.op_stack.v2`，按 Weapon Goal、Stride、Contact Foot Plant、Floor Constraint、统一求解的固定阶段生成候选 Final；所有骨名、Goal、轴向和地面都必须显式配置。
 
 ### 数据怎么进入 SKRTG
 
@@ -75,8 +76,8 @@ UE IK Rig export / MoBu or 3ds Max chain export / Character Definition JSON or X
   → skrtg profile probe / normalize / create
   → .skrtgprofile
 
-.skrtgprofile + 外部动画 Catalog
-  → Bridge v5 / Batch v3
+.skrtgprofile + 外部动画 Catalog + 可选 Operation System v2 JSON
+  → Bridge v5/v6 / Batch v3/v4
   → Retarget Worker（当前内置 UE-compatible JSON backend）
   → 目标 FBX + SKRV v1
   → Native Viewer
@@ -119,6 +120,7 @@ cmake -S . -B build -A x64 `
 - 不自动臆测骨骼链、Root/Pelvis 或源目标映射，也不在缺少必要语义时静默回退。
 - 材质、贴图、Morph Target、Blend Shape fidelity、跨平台与便携运行时尚未进入发布门槛。
 - Viewer 只读取 SKRV，不会在显示层重新计算或“美化”算法差异。
+- 新增 Weapon / Stride / Contact / Floor Op 仍是默认关闭、未选择、未采纳的候选功能；地面目前是显式静态平面，武器锚点必须属于源/目标角色骨架，不包含场景碰撞、独立武器骨架或 Full Body IK。
 
 这个公开仓库只放源码、测试和文档。角色 FBX、动画、UE 工程、导出的 Rig / Golden JSON、`.skrtgprofile`、SKRV 和编译包都留在私有数据边界之外。
 
@@ -130,6 +132,7 @@ cmake -S . -B build -A x64 `
 - [参与开发](CONTRIBUTING.md)
 - [Agent 工作合同](AGENTS.md)
 - [架构与运行链](docs/ARCHITECTURE.md)
+- [Operation System v2 与候选 Ops](docs/OPERATION_SYSTEM_V2.md)
 - [`.skrtgprofile v1` 合同](docs/SKRTGPROFILE_V1.md)
 - [Profile Batch v3 合同](docs/PROFILE_BATCH_V3.md)
 - [性能与计时证据](docs/PERFORMANCE.md)
@@ -177,6 +180,7 @@ See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) for the validation record
 - Every clip produces its own target FBX and SKRV v1 review package.
 - The native Viewer keeps Original, FK, Foundation, and Final lanes synchronized and can switch between verified results from the same batch session.
 - Profiles, catalogs, FBX files, Golden JSON, and outputs are bound and rechecked with SHA-256.
+- An optional `skrtg.op_stack.v2` program runs candidate Weapon Goal, Stride, Contact Foot Plant, Floor Constraint, and unified-solve stages. Bone names, goals, axes, and the floor are always explicit.
 
 ### How data moves through SKRTG
 
@@ -187,8 +191,8 @@ UE IK Rig export / MoBu or 3ds Max chain export / Character Definition JSON or X
   → skrtg profile probe / normalize / create
   → .skrtgprofile
 
-.skrtgprofile + external animation catalog
-  → Bridge v5 / Batch v3
+.skrtgprofile + external animation catalog + optional Operation System v2 JSON
+  → Bridge v5/v6 / Batch v3/v4
   → Retarget Worker (current built-in UE-compatible JSON backend)
   → target FBX + SKRV v1
   → Native Viewer
@@ -231,6 +235,7 @@ cmake -S . -B build -A x64 `
 - There is no guessed chain, Root/Pelvis, or source/target mapping, and no silent fallback when required semantics are missing.
 - Materials, textures, morph targets, Blend Shape fidelity, cross-platform builds, and a portable runtime are not release gates yet.
 - The Viewer reads SKRV results; it does not recompute or exaggerate algorithmic differences in the presentation layer.
+- Weapon / Stride / Contact / Floor operators remain default-off, unselected, and unadopted candidates. The floor is currently an explicit static plane, and weapon anchors must belong to the source/target character skeleton; scene collision, a separate weapon skeleton, and Full Body IK are outside this stage.
 
 This public repository contains source code, tests, and documentation only. Character FBX files, animation clips, Unreal projects, exported Rig / Golden JSON, `.skrtgprofile` packages, SKRV results, and compiled releases stay outside the public data boundary.
 
@@ -242,6 +247,7 @@ This public repository contains source code, tests, and documentation only. Char
 - [Contributing](CONTRIBUTING.md)
 - [Agent working contract](AGENTS.md)
 - [Architecture and runtime flow](docs/ARCHITECTURE.md)
+- [Operation System v2 and candidate operators](docs/OPERATION_SYSTEM_V2.md)
 - [`.skrtgprofile v1` contract](docs/SKRTGPROFILE_V1.md)
 - [Profile Batch v3 contract](docs/PROFILE_BATCH_V3.md)
 - [Performance and timing evidence](docs/PERFORMANCE.md)

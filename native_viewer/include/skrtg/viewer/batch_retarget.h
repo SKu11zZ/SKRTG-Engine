@@ -44,6 +44,8 @@ struct BatchRetargetRequest
     BatchCharacterInput TargetCharacter;
     std::filesystem::path AnimationDirectory;
     std::filesystem::path OutputDirectory;
+    std::filesystem::path OperationStackJson;
+    std::string OperationStackJsonExpectedSha256;
     RetargetBridgeTools Tools;
     std::string AnimationStack;
     bool Recursive = true;
@@ -120,6 +122,8 @@ struct BatchRetargetStatus
     BatchCharacterInput TargetCharacter;
     std::filesystem::path AnimationDirectory;
     std::filesystem::path OutputDirectory;
+    std::filesystem::path OperationStackJson;
+    std::string OperationStackJsonSha256;
     bool Recursive = true;
     std::string AnimationStack;
     bool EnableSpinePelvisFollow = true;

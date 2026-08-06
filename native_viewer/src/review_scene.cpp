@@ -849,6 +849,12 @@ ReviewSceneLoadResult LoadReviewScene(
             Snapshot.at("selected").get<bool>();
         Scene.RouteAdopted =
             Snapshot.at("adopted").get<bool>();
+        Scene.OperationStackCandidateEnabled =
+            Snapshot.value("operationStackCandidateEnabled", false);
+        Scene.OperationStackCandidateSelected =
+            Snapshot.value("operationStackCandidateSelected", false);
+        Scene.OperationStackCandidateAdopted =
+            Snapshot.value("operationStackCandidateAdopted", false);
         Scene.FoundationRouteId =
             Snapshot.at("foundationRoute").get<std::string>();
         Scene.FoundationFrozen =
@@ -865,6 +871,7 @@ ReviewSceneLoadResult LoadReviewScene(
                 Candidate.at("label").get<std::string>(),
                 Candidate.at("frameCount").get<std::uint64_t>(),
                 Candidate.at("fps").get<double>(),
+                Candidate.value("operationStackEnabled", false),
                 Candidate.at("sourceMotionFootLockEnabled").get<bool>(),
                 Candidate.at("sourceMotionFootLockSuccess").get<bool>(),
                 Candidate.at("foundationTrs").at("sha256")

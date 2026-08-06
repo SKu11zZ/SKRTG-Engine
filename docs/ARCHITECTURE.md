@@ -15,10 +15,13 @@ External SHA-256 asset catalog
 Installed .skrtgprofile v1 packages
   + source rest / IK Rig / alignment
   + target rest / IK Rig / alignment
-  -> single-job Bridge v5
-     or profile-backed Batch v3 -> one Bridge v5 request per clip
+  + optional Operation System v2 JSON
+  -> single-job Bridge v5 (no Final ops) / v6 (configured Final ops)
+     or profile-backed Batch v3 / v4 -> one matching Bridge request per clip
   -> complete-selection preflight
   -> UE IK JSON Worker
+     -> frozen Foundation
+     -> ordered named-goal phases + one unified pose solve (when configured)
   -> verified target FBX + review payload
   -> in-process SKRV seal + strict inspection
   -> native Viewer
@@ -37,22 +40,24 @@ character or an incompatible hierarchy are never shown. Catalogs may declare
 profile resources.
 
 The Viewer writes a v5 Bridge request when either selected character comes
-from a profile. The Bridge does not trust the Viewer's in-memory merge: it
+from a profile, or v6 when an Operation System v2 config is present. The
+Bridge does not trust the Viewer's in-memory merge: it
 re-hashes and inspects each bound package, checks profile identity, version,
 role capability, and extracted resource hashes, then verifies the animation
 against the original external catalog.
 
-The profile-backed batch panel writes request v3. It accepts only installed
+The profile-backed batch panel writes request v3 without Final ops and v4 with
+one shared Operation System v2 config. It accepts only installed
 source and target profiles and explicit animation records that match the
 source profile ID and skeleton signature. The batch planner converts every
-record into the same Bridge v5 contract used by the single-job flow and
+record into the matching Bridge v5/v6 contract used by the single-job flow and
 preflights all jobs before creating the output directory. It never scans a
 loose animation folder. Execution remains streaming and serial: one Worker
 process exits before the next starts. Legacy request v1/v2 remains readable
 without acquiring profile or catalog provenance.
 
 Within one complete-selection preflight, immutable file hashes and parsed
-catalog/Profile evidence are cached across jobs. Job-specific FBX and Golden
+catalog/Profile/Operation-config evidence are cached across jobs. Job-specific FBX and Golden
 evidence is still checked independently. The reusable result is bound to the
 full resolved Bridge request and output directory, and the Worker independently
 checks every solver input hash. This is a planning optimization, not a weaker
@@ -79,10 +84,18 @@ local/model rest transforms match the selected source IK Rig within strict
 rest tolerances. An FBX containing any Mesh or BindPose remains on the original
 direct bind-audit path; incomplete bind data fails closed.
 
+The exact loader also reports Mesh/BindPose presence from its first import, so
+the Worker does not import a meshless animation again just to choose that audit
+route. UE-exported source and target rest scenes are normalized and reused
+after coordinate validation instead of being reopened for the solve.
+
 Rest-pose reconciliation, root/pelvis ownership, chain FK, analytic limb IK,
-finger transforms, and optional post operations are represented as explicit
-stages. The route JSON supplies the bone inventory, hierarchy, chains, goals,
-and retarget-pose alignment. Runtime bone-name guessing is not used.
+finger transforms, and optional Final operations are represented as explicit
+stages. Operation System v2 separates goal generation, goal warping, temporal
+constraints, spatial constraints, pose solving, and later post-solve work.
+The route JSON supplies the bone inventory, hierarchy, chains, goals, and
+retarget-pose alignment. Runtime bone-name guessing is not used. See
+[Operation System v2](OPERATION_SYSTEM_V2.md).
 
 ## Review contract
 

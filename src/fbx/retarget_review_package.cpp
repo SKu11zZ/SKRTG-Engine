@@ -1473,6 +1473,8 @@ bool ValidateClip(
     }
     if (Clip.SourceMotionFootLockEnabled !=
             Options.SourceMotionFootLockCandidateEnabled ||
+        Clip.OperationStackEnabled !=
+            Options.OperationStackCandidateEnabled ||
         !SourceMotionFootLockTelemetrySane(Clip))
     {
         OutError =
@@ -1554,6 +1556,7 @@ bool ValidateClip(
                 return false;
             }
         if (!Clip.SourceMotionFootLockEnabled &&
+            !Clip.OperationStackEnabled &&
             (!ExactPose(*Frame.TargetFoundationLocalPose,
                         *Frame.TargetFinalLocalPose) ||
              !ExactPose(*Frame.TargetFoundationModelPose,
@@ -1595,6 +1598,15 @@ std::string BuildViewerData(
                  ? "true" : "false")
          << ",\"sourceMotionFootLockCandidateAdopted\":"
          << (Options.SourceMotionFootLockCandidateAdopted
+                 ? "true" : "false") << ","
+         << "\"operationStackCandidateEnabled\":"
+         << (Options.OperationStackCandidateEnabled
+                 ? "true" : "false")
+         << ",\"operationStackCandidateSelected\":"
+         << (Options.OperationStackCandidateSelected
+                 ? "true" : "false")
+         << ",\"operationStackCandidateAdopted\":"
+         << (Options.OperationStackCandidateAdopted
                  ? "true" : "false") << ","
          << "\"upstreamLimbIkRouteSelected\":"
          << (Options.UpstreamLimbIkRouteSelected ? "true" : "false")
@@ -1785,6 +1797,8 @@ std::string BuildViewerData(
               << Clip.LimbIkMaximumEndpointErrorCm
                << ",\"limbIkMaximumShadowToRealPositionDeltaCm\":"
                << Clip.LimbIkMaximumShadowToRealPositionDeltaCm
+               << ",\"operationStackEnabled\":"
+               << (Clip.OperationStackEnabled ? "true" : "false")
                << ",\"sourceMotionFootLockEnabled\":"
                << (Clip.SourceMotionFootLockEnabled ? "true" : "false")
                << ",\"sourceMotionFootLockSuccess\":"
@@ -2025,7 +2039,7 @@ renderTposeContracts();
         "Final Result contains no source overlay. The static T-pose contract below lists all mapped chains, limb and finger IK Goals, poles, anchor families, and the explicit Root/Pelvis ownership split; it uses one shared centimeter display scale and does not react to animation, frame or camera controls.");
     ReplaceAll(
         "<label><input id=\"skeletonToggle\" type=\"checkbox\" checked>Skeleton</label><label>animation",
-        "<label><input id=\"skeletonToggle\" type=\"checkbox\" checked>Skeleton</label><label><input id=\"footLockToggle\" type=\"checkbox\">FootLock Op</label><label>animation");
+        "<label><input id=\"skeletonToggle\" type=\"checkbox\" checked>Skeleton</label><label><input id=\"footLockToggle\" type=\"checkbox\"><span id=\"finalOpLabel\">FootLock Op</span></label><label>animation");
     ReplaceAll(
         "c.fkTrs=f32(c.fkTrs);c.finalTrs=f32(c.finalTrs)",
         "c.fkTrs=f32(c.fkTrs);c.foundationTrs=f32(c.foundationTrs);c.finalTrs=f32(c.finalTrs)");
@@ -2034,10 +2048,10 @@ renderTposeContracts();
         "label:'Foundation (FK + IK) + Original 10%',contract:'anchor_aligned_source_ghost_10_plus_foundation_100'");
     ReplaceAll(
         "{id:'final',label:'Final Result',contract:'final_only_no_overlay'}",
-        "{id:'final',label:'Final Result (FootLock toggle)',contract:'toggle_selected_final_only_no_overlay'}");
+        "{id:'final',label:'Final Result (configured Ops)',contract:'toggle_selected_final_only_no_overlay'}");
     ReplaceAll(
         "$('nextClip').disabled=DATA.clips.length<2;let clipIndex",
-        "$('nextClip').disabled=DATA.clips.length<2;$('footLockToggle').checked=DATA.sourceMotionFootLockCandidateEnabled;$('footLockToggle').disabled=!DATA.sourceMotionFootLockCandidateEnabled;let clipIndex");
+        "$('nextClip').disabled=DATA.clips.length<2;$('footLockToggle').checked=DATA.operationStackCandidateEnabled||DATA.sourceMotionFootLockCandidateEnabled;$('footLockToggle').disabled=DATA.operationStackCandidateEnabled||!DATA.sourceMotionFootLockCandidateEnabled;$('finalOpLabel').textContent=DATA.operationStackCandidateEnabled?'Configured Ops':'FootLock Op';let clipIndex");
     ReplaceAll(
         "fk:skinPackage(DATA.targetMesh,c.fkTrs,slot,DATA.targetBones.length),final:skinPackage(DATA.targetMesh,c.finalTrs,slot,DATA.targetBones.length)",
         "fk:skinPackage(DATA.targetMesh,c.fkTrs,slot,DATA.targetBones.length),foundation:skinPackage(DATA.targetMesh,c.foundationTrs,slot,DATA.targetBones.length),final:skinPackage(DATA.targetMesh,c.finalTrs,slot,DATA.targetBones.length)");
@@ -2061,26 +2075,26 @@ renderTposeContracts();
         "$('exportFbx').href=encodeURI($('footLockToggle').checked?clip.exportFbx:clip.foundationExportFbx);$('exportFbx').dataset.lane=$('footLockToggle').checked?'final':'foundation';");
     ReplaceAll(
         "endpoint=${clip.limbIkMaximumEndpointErrorCm.toExponential(2)}cm`;",
-        "endpoint=${clip.limbIkMaximumEndpointErrorCm.toExponential(2)}cm | FootLock=${$('footLockToggle').checked?'on':'off'} source-motion-only=${clip.sourceMotionFootLockNoGroundOrContactSemanticsUsed?'yes':'no'}`;");
+        "endpoint=${clip.limbIkMaximumEndpointErrorCm.toExponential(2)}cm | FinalOps=${DATA.operationStackCandidateEnabled?'configured':($('footLockToggle').checked?'foot-lock':'off')}`;");
     ReplaceAll(
         "$('skeletonToggle').onchange=render;",
         "$('skeletonToggle').onchange=render;$('footLockToggle').onchange=render;");
     ReplaceAll(
         "exportHref:()=>$('exportFbx').getAttribute('href'),sourceDisplayContract:",
-        "exportHref:()=>$('exportFbx').getAttribute('href'),setFootLock:v=>{if(!$('footLockToggle').disabled){$('footLockToggle').checked=!!v;render()}},footLockState:()=>({enabled:$('footLockToggle').checked,available:DATA.sourceMotionFootLockCandidateEnabled,lane:$('exportFbx').dataset.lane}),foundationFrozen:()=>({route:DATA.foundationRoute,frozen:DATA.foundationFrozen}),opStackStatus:()=>({route:DATA.sourceMotionFootLockRoute,enabled:currentClip().sourceMotionFootLockEnabled,success:currentClip().sourceMotionFootLockSuccess,deterministic:currentClip().sourceMotionFootLockDeterministic,noGroundOrContact:currentClip().sourceMotionFootLockNoGroundOrContactSemanticsUsed,committed:currentClip().sourceMotionFootLockCommittedFrames,rolledBack:currentClip().sourceMotionFootLockRolledBackFrames}),sourceDisplayContract:");
+        "exportHref:()=>$('exportFbx').getAttribute('href'),setFootLock:v=>{if(!$('footLockToggle').disabled){$('footLockToggle').checked=!!v;render()}},footLockState:()=>({enabled:$('footLockToggle').checked,available:DATA.sourceMotionFootLockCandidateEnabled,lane:$('exportFbx').dataset.lane}),foundationFrozen:()=>({route:DATA.foundationRoute,frozen:DATA.foundationFrozen}),opStackStatus:()=>({configured:DATA.operationStackCandidateEnabled,selected:DATA.operationStackCandidateSelected,adopted:DATA.operationStackCandidateAdopted,enabled:currentClip().operationStackEnabled,footLockRoute:DATA.sourceMotionFootLockRoute,footLockEnabled:currentClip().sourceMotionFootLockEnabled}),sourceDisplayContract:");
     ReplaceAll(
         "The export button points to the pre-generated target Mesh + skeleton + Final animation FBX for the selected clip.",
-        "The export button follows the FootLock Op toggle: OFF downloads the roundtrip-verified frozen Foundation FBX; ON downloads the independently roundtrip-verified FootLock Final FBX.");
+        "The export button follows the Final Ops switch: OFF downloads the roundtrip-verified frozen Foundation FBX; ON downloads the independently roundtrip-verified configured Final FBX.");
     ReplaceAll(
         "FK + IK / Final Result",
         "Foundation (FK + IK) / toggle-selected Final Result");
     ReplaceAll(
         "upstream Limb IK selected=true adopted=true | Spine/Pelvis candidate enabled=true route_selected=false route_adopted=false | stage_complete=false | independent review pending",
-        "Foundation v1 frozen=true | FootLock candidate selected=false adopted=false | no ground/contact semantics | stage_complete=false | independent review pending");
+        "Foundation v1 frozen=true | Final operations candidate selected=false adopted=false | stage_complete=false | independent review pending");
 
     // Visual-inspection controls are deliberately layered onto the frozen
     // pose lanes. They consume existing model-pose samples only and never
-    // participate in FK, IK, FootLock, export, or route selection.
+    // participate in FK, IK, Final Ops, export, or route selection.
     const std::string VisualInspectionCss = R"VISUALCSS(
 .viewport{touch-action:none;cursor:grab;user-select:none}.viewport.camera-dragging{cursor:grabbing}.grid-canvas,.skeleton-canvas{pointer-events:none}.inspection-controls{display:contents}.inspection-help{flex-basis:100%;color:color-mix(in srgb,var(--ink) 72%,transparent);font:11px ui-monospace,monospace}.inspection-help b{color:var(--ink)}#groundY{width:68px}#goalTrailLength{width:96px}.goal-trail-key{display:inline-flex;align-items:center;gap:5px}.goal-trail-key i{display:inline-block;width:22px;border-top:3px solid #35d4ff;border-radius:10px}.ground-grid-key{display:inline-block;width:22px;height:12px;background:linear-gradient(90deg,transparent 45%,#718092 46%,#718092 54%,transparent 55%),linear-gradient(0deg,transparent 45%,#718092 46%,#718092 54%,transparent 55%);background-size:8px 8px;vertical-align:middle;margin-right:5px}
 )VISUALCSS";
@@ -2159,8 +2173,8 @@ function bindCameraInteractions(){for(const view of document.querySelectorAll('.
         "all four views use the same selected animation, frame/time, orthographic camera, yaw/pitch, projection and display scale.",
         "all four views use the same selected animation, frame/time, orthographic camera, yaw/pitch, projection, display scale and free-camera transform. Follow mode tracks the animated envelope; Free mode keeps a world-space camera center so character/root motion remains observable.");
     ReplaceAll(
-        "The export button follows the FootLock Op toggle:",
-        "The virtual XZ Ground Grid is a user-adjustable display reference at the labelled Y value; it is not ground/contact/terrain evidence. Goal History reads declared Goal-bone evaluated model positions from the existing source, FK, frozen Foundation and toggle-selected Final lanes; it does not alter or claim access to hidden solver inputs. The export button follows the FootLock Op toggle:");
+        "The export button follows the Final Ops switch:",
+        "The virtual XZ Ground Grid is a user-adjustable display reference at the labelled Y value; it is display-only and is not solver ground/contact/terrain evidence. Goal History reads declared Goal-bone evaluated model positions from the existing source, FK, frozen Foundation and toggle-selected Final lanes; it does not alter or claim access to hidden solver inputs. The export button follows the Final Ops switch:");
     const auto ReplaceElementText =
         [&Result](const std::string& Id,
                   const std::string& Text)
@@ -2946,7 +2960,9 @@ std::string BuildAnimationManifest(
              << JsonEscape(Clip.ExportFbxFileName)
              << "\",\"final_export_fbx_sha256\":\""
              << JsonEscape(FinalExportHashes[Index])
-             << "\",\"source_motion_foot_lock\":{"
+             << "\",\"operation_stack_enabled\":"
+             << (Clip.OperationStackEnabled ? "true" : "false")
+             << ",\"source_motion_foot_lock\":{"
              << "\"enabled\":"
              << (Clip.SourceMotionFootLockEnabled ? "true" : "false")
              << ",\"success\":"
@@ -2980,6 +2996,15 @@ std::string BuildAnimationManifest(
          << JsonEscape(Options.FoundationRouteId)
          << "\",\n  \"foundation_frozen\":"
          << (Options.FoundationFrozen ? "true" : "false")
+         << ",\n  \"operation_stack_candidate_enabled\":"
+         << (Options.OperationStackCandidateEnabled
+                 ? "true" : "false")
+         << ",\n  \"operation_stack_candidate_selected\":"
+         << (Options.OperationStackCandidateSelected
+                 ? "true" : "false")
+         << ",\n  \"operation_stack_candidate_adopted\":"
+         << (Options.OperationStackCandidateAdopted
+                 ? "true" : "false")
          << ",\n  \"source_motion_foot_lock_route\":\""
          << JsonEscape(Options.SourceMotionFootLockRouteId)
          << "\",\n  \"source_motion_foot_lock_candidate_enabled\":"
@@ -3212,6 +3237,15 @@ std::string BuildVerificationJson(
          << JsonEscape(Options.FoundationRouteId)
          << "\",\n  \"foundation_frozen\":"
          << (Options.FoundationFrozen ? "true" : "false")
+         << ",\n  \"operation_stack_candidate_enabled\":"
+         << (Options.OperationStackCandidateEnabled
+                 ? "true" : "false")
+         << ",\n  \"operation_stack_candidate_selected\":"
+         << (Options.OperationStackCandidateSelected
+                 ? "true" : "false")
+         << ",\n  \"operation_stack_candidate_adopted\":"
+         << (Options.OperationStackCandidateAdopted
+                 ? "true" : "false")
          << ",\n  \"source_motion_foot_lock_route\":\""
          << JsonEscape(Options.SourceMotionFootLockRouteId)
          << "\",\n  \"source_motion_foot_lock_candidate_enabled\":"
@@ -3313,6 +3347,8 @@ RetargetReviewPackageResult GenerateRetargetReviewPackage(
             !Options.SourceMotionFootLockCandidateEnabled &&
             !Options.SourceMotionFootLockCandidateSelected &&
             !Options.SourceMotionFootLockCandidateAdopted &&
+            !Options.OperationStackCandidateSelected &&
+            !Options.OperationStackCandidateAdopted &&
             Options.NormalizeFbxToUEJsonSpace;
     if (!ContractValid)
     {
@@ -3835,7 +3871,7 @@ RetargetReviewPackageResult GenerateRetargetReviewPackage(
         Options.Clips.size() == 1
             ? "Only one source animation FBX is currently supplied, so the animation switch control is present but disabled until another reviewed clip is added."
             : "Animation switching is enabled for the supplied reviewed clip manifest.",
-        "Both Foundation and configured Final FBXs are pre-generated and roundtrip-verified; the viewer FootLock toggle switches both the fourth viewport and export link. Route selection, independent review, production quality, and readiness remain open."};
+        "Both Foundation and configured Final FBXs are pre-generated and roundtrip-verified; the viewer Final Ops control switches both the fourth viewport and export link. Route selection, independent review, production quality, and readiness remain open."};
     if (std::any_of(
             SourceMeshFallbackUsed.begin(),
             SourceMeshFallbackUsed.end(),

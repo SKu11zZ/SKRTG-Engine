@@ -5,39 +5,6 @@ project(SKRTGNativeViewer
     DESCRIPTION "Native review, bridge, batch, and SKRV tools for SKRTG"
     LANGUAGES C CXX)
 
-function(skrtg_repair_msvc_ninja_showincludes_prefix)
-    if(NOT (MSVC AND CMAKE_GENERATOR MATCHES "^Ninja"))
-        return()
-    endif()
-
-    set(probe_dir "${CMAKE_BINARY_DIR}/CMakeFiles/SKRTGShowIncludes")
-    file(MAKE_DIRECTORY "${probe_dir}")
-    file(WRITE "${probe_dir}/probe_header.h" "#pragma once\n")
-    file(WRITE "${probe_dir}/probe.cpp"
-        "#include \"probe_header.h\"\nint main() { return 0; }\n")
-    execute_process(
-        COMMAND "${CMAKE_CXX_COMPILER}"
-            /nologo /TP /utf-8 /showIncludes /c probe.cpp
-            "/Fo${probe_dir}/probe.obj"
-        WORKING_DIRECTORY "${probe_dir}"
-        OUTPUT_VARIABLE showincludes_output
-        ERROR_VARIABLE showincludes_error
-        RESULT_VARIABLE showincludes_result
-        ENCODING NONE)
-    if(NOT showincludes_result EQUAL 0 OR NOT
-       "${showincludes_output}" MATCHES
-       "(^|\n)([^:\n][^:\n]+:[^:\n]*[^: \n][^: \n]:?[ \t]+)([A-Za-z]:\\\\|\\./|\\.\\\\|/)")
-        message(FATAL_ERROR
-            "Unable to establish reliable MSVC/Ninja /showIncludes parsing.\n"
-            "stdout:\n${showincludes_output}\n"
-            "stderr:\n${showincludes_error}")
-    endif()
-    set(CMAKE_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}" PARENT_SCOPE)
-    set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}" PARENT_SCOPE)
-endfunction()
-
-skrtg_repair_msvc_ninja_showincludes_prefix()
-
 option(SKRTG_NATIVE_VIEWER_BUILD_TESTS "Build native Viewer data-contract tests" ON)
 set(SKRTG_RETARGET_ASSET_CATALOG_DIR "" CACHE PATH
     "Optional external directory containing retarget_asset_catalog.json and its hash-bound assets")
