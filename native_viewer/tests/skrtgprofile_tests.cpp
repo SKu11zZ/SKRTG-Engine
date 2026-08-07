@@ -172,6 +172,10 @@ void TestPackageLifecycle()
     Request.RestFbx = Rest;
     Request.IkRigJson = Rig;
     Request.AlignmentRetargeterJson = Alignment;
+    Request.MeshSelection.Declared = true;
+    Request.MeshSelection.ActiveLod = 0;
+    Request.MeshSelection.MeshNodePaths = {
+        "CharacterRoot/Body_LOD0"};
 
     const Profile::ProfilePackResult Packed =
         Profile::WriteCharacterProfilePackage(Request);
@@ -185,6 +189,11 @@ void TestPackageLifecycle()
     Check(Packed.Profile.SkeletonSignatureSha256 ==
               std::string(64, 'A'),
           "skeleton fingerprint should round-trip");
+    Check(Packed.Profile.MeshSelection.Declared &&
+              Packed.Profile.MeshSelection.ActiveLod == 0 &&
+              Packed.Profile.MeshSelection.MeshNodePaths ==
+                  Request.MeshSelection.MeshNodePaths,
+          "explicit active LOD Mesh selection should round-trip");
 
     const Profile::ProfileInspectResult Inspected =
         Profile::InspectCharacterProfilePackage(
@@ -193,6 +202,9 @@ void TestPackageLifecycle()
           "committed package should inspect successfully");
     Check(Inspected.PackageSha256 == Packed.PackageSha256,
           "pack and inspect package digests should match");
+    Check(Inspected.Profile.MeshSelection.Declared &&
+              Inspected.Profile.MeshSelection.MeshNodePaths.size() == 1,
+          "inspected profile should retain exact FBX Mesh paths");
 
     const Profile::ProfilePackResult Overwrite =
         Profile::WriteCharacterProfilePackage(Request);
@@ -354,6 +366,14 @@ void TestPackageLifecycle()
     Write(Alignment, AlignmentDocument("IK_Other").dump(2) + "\n");
     Check(!Profile::WriteCharacterProfilePackage(WrongRig).Success,
           "mismatched Retargeter target IK Rig must fail");
+
+    Profile::ProfilePackRequest DuplicateMeshPath = Request;
+    DuplicateMeshPath.OutputPackage =
+        Root.Path / "duplicate_mesh_path.skrtgprofile";
+    DuplicateMeshPath.MeshSelection.MeshNodePaths.push_back(
+        DuplicateMeshPath.MeshSelection.MeshNodePaths.front());
+    Check(!Profile::WriteCharacterProfilePackage(DuplicateMeshPath).Success,
+          "duplicate exact Mesh paths must fail closed");
 
     Write(Alignment, AlignmentDocument().dump(2) + "\n");
     Json WrongTypeRig = RigDocument();

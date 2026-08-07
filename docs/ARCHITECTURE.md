@@ -46,6 +46,13 @@ re-hashes and inspects each bound package, checks profile identity, version,
 role capability, and extracted resource hashes, then verifies the animation
 against the original external catalog.
 
+An optional hash-bound Character Profile Mesh selection crosses the same
+Bridge/Worker boundary. The Worker resolves only exact FBX scene paths and
+writes only the selected active LOD into the review payload. The source and
+exported FBX keep their full LOD inventory. Multi-Mesh UE IK JSON inputs with
+no explicit selection fail closed, so the Native Viewer cannot accidentally
+draw several overlapping full-body LODs.
+
 The profile-backed batch panel writes request v3 without Final ops and v4 with
 one shared Operation System v2 config. It accepts only installed
 source and target profiles and explicit animation records that match the

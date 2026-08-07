@@ -220,7 +220,13 @@ void TestCreateRequestAndPackage()
           {"canonicalProfileId", "ue5_manny"},
           {"restPoseKind", "t_pose"},
           {"sourceEnabled", true},
-          {"targetEnabled", true}}},
+          {"targetEnabled", true},
+          {"meshSelection",
+           {{"schema", Profile::CharacterMeshSelectionSchema},
+            {"schemaVersion", 1},
+            {"activeLod", 0},
+            {"meshNodePaths",
+             Json::array({"CharacterRoot/Body_LOD0"})}}}}},
         {"inputs",
          {{"restFbx", "inputs/rest.fbx"},
           {"definition", "inputs/definition.json"},
@@ -238,6 +244,10 @@ void TestCreateRequestAndPackage()
     Check(Request.RestFbx ==
               std::filesystem::absolute(Inputs / "rest.fbx").lexically_normal(),
           "request paths should resolve relative to request file");
+    Check(Request.MeshSelection.Declared &&
+              Request.MeshSelection.ActiveLod == 0 &&
+              Request.MeshSelection.MeshNodePaths.size() == 1,
+          "profile create request should parse exact active LOD selection");
 
     Json UnknownRequest = RequestJson;
     UnknownRequest["profile"]["guessBoneNames"] = true;
@@ -247,6 +257,16 @@ void TestCreateRequestAndPackage()
     Check(!Profile::ReadCharacterProfileCreateRequest(
                UnknownRequestPath, RejectedRequest, Error),
           "unknown request fields must fail schema validation");
+
+    Json UnsafeMeshPath = RequestJson;
+    UnsafeMeshPath["profile"]["meshSelection"]
+                  ["meshNodePaths"][0] = "../Body_LOD0";
+    const auto UnsafeMeshPathFile =
+        Root.Path / "unsafe-mesh-path.json";
+    Write(UnsafeMeshPathFile, UnsafeMeshPath.dump(2));
+    Check(!Profile::ReadCharacterProfileCreateRequest(
+               UnsafeMeshPathFile, RejectedRequest, Error),
+          "unsafe FBX Mesh node paths must fail closed");
 
     const auto Created = Profile::CreateCharacterProfile(Request);
     Check(Created.Success, "complete normalized definition should package");
@@ -259,6 +279,9 @@ void TestCreateRequestAndPackage()
           "package should retain importer provenance");
     Check(Created.Package.Profile.RestPoseKind == "t_pose",
           "package should retain declared rest pose kind");
+    Check(Created.Package.Profile.MeshSelection.Declared &&
+              Created.Package.Profile.MeshSelection.ActiveLod == 0,
+          "created package should retain active LOD selection");
 
     const auto Inspected = Profile::InspectCharacterProfilePackage(
         Request.OutputPackage);

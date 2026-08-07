@@ -137,6 +137,14 @@ Json ProfileJson(const Profile::CharacterProfileDescriptor& Value)
             {"importerVersion", Value.DefinitionImporterVersion},
             {"restPoseKind", Value.RestPoseKind}};
     }
+    if (Value.MeshSelection.Declared)
+    {
+        Result["meshSelection"] = {
+            {"schema", Profile::CharacterMeshSelectionSchema},
+            {"schemaVersion", 1},
+            {"activeLod", Value.MeshSelection.ActiveLod},
+            {"meshNodePaths", Value.MeshSelection.MeshNodePaths}};
+    }
     return Result;
 }
 

@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,44 @@ bool WriteTextFile(
     if (!Output) return false;
     Output << Text;
     return static_cast<bool>(Output);
+}
+
+bool ValidateMeshSelection(
+    const skrtg::fbx::RetargetReviewMeshSelection& Selection,
+    const char* Label,
+    std::string& OutError)
+{
+    const bool HasActiveLod = Selection.ActiveLod >= 0;
+    const bool HasPaths = !Selection.MeshNodePaths.empty();
+    if (HasActiveLod != HasPaths)
+    {
+        OutError = std::string(Label) +
+            " Mesh selection requires both an active LOD and exact node paths";
+        return false;
+    }
+    if (!HasActiveLod) return true;
+    if (Selection.ActiveLod > 255 ||
+        Selection.MeshNodePaths.size() > 64)
+    {
+        OutError = std::string(Label) +
+            " Mesh selection is outside the supported limits";
+        return false;
+    }
+    std::set<std::string> Unique;
+    for (const std::string& Path : Selection.MeshNodePaths)
+    {
+        if (Path.empty() || Path.size() > 4096 ||
+            Path.front() == '/' || Path.back() == '/' ||
+            Path.find("//") != std::string::npos ||
+            Path.find('\\') != std::string::npos ||
+            !Unique.insert(Path).second)
+        {
+            OutError = std::string(Label) +
+                " Mesh node paths must be unique canonical relative FBX scene paths";
+            return false;
+        }
+    }
+    return true;
 }
 
 void PrintHelp()
@@ -51,6 +91,10 @@ void PrintHelp()
            " [--source-animation-golden-sha256 <sha256>]"
            " --target-rest-fbx <target_rest.fbx>"
            " --target-rest-sha256 <sha256>"
+           " [--source-mesh-active-lod <index>"
+           " --source-mesh-node-path <exact/fbx/path> ...]"
+           " [--target-mesh-active-lod <index>"
+           " --target-mesh-node-path <exact/fbx/path> ...]"
            " [--op-stack-json <candidate.skrtgops.json>]"
            " [--op-stack-sha256 <sha256>]"
            " --out-dir <artifact_root>"
@@ -241,6 +285,38 @@ int main(int argc, char** argv)
                 return 2;
             Options.TargetRestFbxExpectedSha256 = *Value;
         }
+        else if (Argument == "--source-mesh-active-lod" ||
+                 Argument == "--target-mesh-active-lod")
+        {
+            if ((Value = RequireValue(Index, Argument)) == nullptr)
+                return 2;
+            int ActiveLod = -1;
+            try
+            {
+                std::size_t Parsed = 0;
+                ActiveLod = std::stoi(*Value, &Parsed);
+                if (Parsed != Value->size()) throw std::invalid_argument("");
+            }
+            catch (...)
+            {
+                std::cerr << Argument << " must be an integer.\n";
+                return 2;
+            }
+            if (Argument == "--source-mesh-active-lod")
+                Options.SourceMeshSelection.ActiveLod = ActiveLod;
+            else
+                Options.TargetMeshSelection.ActiveLod = ActiveLod;
+        }
+        else if (Argument == "--source-mesh-node-path" ||
+                 Argument == "--target-mesh-node-path")
+        {
+            if ((Value = RequireValue(Index, Argument)) == nullptr)
+                return 2;
+            if (Argument == "--source-mesh-node-path")
+                Options.SourceMeshSelection.MeshNodePaths.push_back(*Value);
+            else
+                Options.TargetMeshSelection.MeshNodePaths.push_back(*Value);
+        }
         else if (Argument == "--op-stack-json")
         {
             if ((Value = RequireValue(Index, Argument)) == nullptr)
@@ -336,6 +412,17 @@ int main(int argc, char** argv)
               .empty())))
     {
         PrintHelp();
+        return 2;
+    }
+    std::string MeshSelectionError;
+    if (!ValidateMeshSelection(
+            Options.SourceMeshSelection, "source",
+            MeshSelectionError) ||
+        !ValidateMeshSelection(
+            Options.TargetMeshSelection, "target",
+            MeshSelectionError))
+    {
+        std::cerr << MeshSelectionError << "\n";
         return 2;
     }
 

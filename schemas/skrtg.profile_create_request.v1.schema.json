@@ -19,7 +19,10 @@
         "canonicalProfileId": { "type": "string", "default": "ue5_manny" },
         "restPoseKind": { "enum": ["t_pose", "a_pose", "custom", "unknown"] },
         "sourceEnabled": { "type": "boolean", "default": true },
-        "targetEnabled": { "type": "boolean", "default": true }
+        "targetEnabled": { "type": "boolean", "default": true },
+        "meshSelection": {
+          "$ref": "skrtg.character_mesh_selection.v1.schema.json"
+        }
       }
     },
     "inputs": {

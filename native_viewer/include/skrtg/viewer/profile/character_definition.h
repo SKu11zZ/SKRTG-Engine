@@ -74,6 +74,7 @@ struct CharacterProfileCreateRequest
     std::string RestPoseKind = "unknown";
     bool SourceEnabled = true;
     bool TargetEnabled = true;
+    CharacterMeshSelectionDescriptor MeshSelection;
 };
 
 struct CharacterProfileCreateResult

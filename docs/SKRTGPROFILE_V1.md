@@ -43,6 +43,42 @@ hashed `profile.json`; it does not add a seventh container record or weaken
 the six-record runtime contract. Legacy v1 packages without this additive
 metadata remain valid.
 
+## Active runtime Mesh / LOD selection
+
+`profile.json` may contain a `skrtg.character_mesh_selection.v1` record:
+
+```json
+{
+  "meshSelection": {
+    "schema": "skrtg.character_mesh_selection.v1",
+    "schemaVersion": 1,
+    "activeLod": 0,
+    "meshNodePaths": [
+      "CharacterRoot/Character_LodGroup/Character_LOD0"
+    ]
+  }
+}
+```
+
+`meshNodePaths` are exact FBX scene paths relative to the FBX scene root.
+They are not regular expressions and are never derived from node names. More
+than one path may be listed when one LOD is split into body, head, clothing,
+or other intentional Mesh nodes. `activeLod` is explicit audit metadata; the
+paths are the authoritative selection, so an `_LOD0` suffix is not assumed.
+
+The complete source FBX remains in the profile and verified target FBX exports
+retain its complete Mesh/LOD inventory. Only the HTML/SKRV/Native Viewer
+review payload is filtered to the declared paths. Mesh selection therefore
+cannot modify the skeleton, rest pose, chain mapping, animation, or solver.
+
+For compatibility, a legacy profile without `meshSelection` remains valid
+when its review FBX has exactly one Mesh node. On the UE IK JSON runtime path,
+an FBX with multiple Mesh nodes and no explicit selection fails closed and
+reports the available exact paths. A missing path, duplicate path, non-Mesh
+path, or incomplete declaration also fails before an SKRV package is
+committed. This prevents several full-body LODs from being skinned and drawn
+at the same transform.
+
 ## Identity and versions
 
 `profileId` is portable lowercase ASCII. It may contain letters, digits,
@@ -169,6 +205,10 @@ resource paths before running the Worker. A changed package, changed extracted
 file, mismatched role, wrong version, wrong animation owner, wrong skeleton
 fingerprint, or changed catalog fails preflight without starting a child
 process.
+
+When present, the Bridge also forwards the inspected profile's exact Mesh
+selection across the process boundary. The Worker validates it again against
+the hash-bound rest FBX. The Viewer never chooses or guesses a LOD itself.
 
 The batch panel applies the same contract to multiple animations. It shows
 only installed source/target profiles and only catalog clips compatible with

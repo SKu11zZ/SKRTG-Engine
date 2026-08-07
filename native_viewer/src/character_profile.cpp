@@ -16,6 +16,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -714,6 +715,60 @@ bool ParseProfileDescriptor(
         Authoring.value("importerVersion", "");
     Out.RestPoseKind =
         Authoring.value("restPoseKind", "");
+    Out.MeshSelection = {};
+    if (Value.contains("meshSelection"))
+    {
+        const Json& Selection = Value.at("meshSelection");
+        if (!Selection.is_object())
+        {
+            OutError = "character Mesh selection is not an object";
+            return false;
+        }
+        const std::set<std::string> Allowed = {
+            "schema", "schemaVersion", "activeLod", "meshNodePaths"};
+        for (auto It = Selection.begin(); It != Selection.end(); ++It)
+        {
+            if (Allowed.find(It.key()) == Allowed.end())
+            {
+                OutError =
+                    "character Mesh selection contains an unknown field: " +
+                    It.key();
+                return false;
+            }
+        }
+        if (Selection.value("schema", "") !=
+                CharacterMeshSelectionSchema ||
+            !Selection.contains("schemaVersion") ||
+            !Selection.at("schemaVersion").is_number_integer() ||
+            Selection.at("schemaVersion").get<int>() != 1 ||
+            !Selection.contains("activeLod") ||
+            !Selection.at("activeLod").is_number_integer() ||
+            !Selection.contains("meshNodePaths") ||
+            !Selection.at("meshNodePaths").is_array())
+        {
+            OutError = "unsupported or incomplete character Mesh selection";
+            return false;
+        }
+        Out.MeshSelection.Declared = true;
+        Out.MeshSelection.ActiveLod =
+            Selection.at("activeLod").get<int>();
+        for (const Json& Path : Selection.at("meshNodePaths"))
+        {
+            if (!Path.is_string())
+            {
+                OutError =
+                    "character Mesh selection paths must be strings";
+                return false;
+            }
+            Out.MeshSelection.MeshNodePaths.push_back(
+                Path.get<std::string>());
+        }
+        if (!ValidateCharacterMeshSelection(
+                Out.MeshSelection, OutError))
+        {
+            return false;
+        }
+    }
     Out.SourceEnabled = Value.value("sourceEnabled", true);
     Out.TargetEnabled = Value.value("targetEnabled", true);
     if (!IsCharacterProfileId(Out.ProfileId) ||
@@ -1574,6 +1629,84 @@ bool IsCharacterProfileVersion(const std::string& Value)
     return true;
 }
 
+bool ValidateCharacterMeshSelection(
+    const CharacterMeshSelectionDescriptor& Value,
+    std::string& OutError)
+{
+    OutError.clear();
+    if (!Value.Declared)
+    {
+        if (Value.ActiveLod != -1 || !Value.MeshNodePaths.empty())
+        {
+            OutError =
+                "undeclared character Mesh selection must be empty";
+            return false;
+        }
+        return true;
+    }
+    if (Value.ActiveLod < 0 || Value.ActiveLod > 255)
+    {
+        OutError = "active LOD must be an integer from 0 through 255";
+        return false;
+    }
+    if (Value.MeshNodePaths.empty() ||
+        Value.MeshNodePaths.size() > MaximumProfileMeshNodePaths)
+    {
+        OutError =
+            "character Mesh selection must declare 1 through 64 exact FBX node paths";
+        return false;
+    }
+    std::set<std::string> UniquePaths;
+    for (const std::string& Path : Value.MeshNodePaths)
+    {
+        if (Path.empty() ||
+            Path.size() > MaximumProfileMeshNodePathBytes ||
+            Path.front() == '/' || Path.back() == '/' ||
+            Path.find("//") != std::string::npos ||
+            Path.find('\\') != std::string::npos)
+        {
+            OutError =
+                "character Mesh node paths must be canonical relative FBX scene paths";
+            return false;
+        }
+        std::size_t SegmentBegin = 0;
+        while (SegmentBegin < Path.size())
+        {
+            const std::size_t SegmentEnd = Path.find('/', SegmentBegin);
+            const std::string_view Segment(
+                Path.data() + SegmentBegin,
+                (SegmentEnd == std::string::npos ? Path.size() : SegmentEnd) -
+                    SegmentBegin);
+            if (Segment == "." || Segment == "..")
+            {
+                OutError =
+                    "character Mesh node paths cannot contain dot segments";
+                return false;
+            }
+            if (SegmentEnd == std::string::npos) break;
+            SegmentBegin = SegmentEnd + 1;
+        }
+        if (std::any_of(
+                Path.begin(), Path.end(),
+                [](const unsigned char Character)
+                {
+                    return Character == 0 || Character < 0x20;
+                }))
+        {
+            OutError =
+                "character Mesh node paths cannot contain control characters";
+            return false;
+        }
+        if (!UniquePaths.insert(Path).second)
+        {
+            OutError =
+                "character Mesh node paths must be unique";
+            return false;
+        }
+    }
+    return true;
+}
+
 int CompareCharacterProfileVersions(
     const std::string& Left,
     const std::string& Right)
@@ -1704,6 +1837,12 @@ ProfilePackResult WriteCharacterProfilePackage(
         return Fail("canonical profile id is invalid");
     if (!Request.SourceEnabled && !Request.TargetEnabled)
         return Fail("profile must be enabled as source or target");
+    std::string MeshSelectionError;
+    if (!ValidateCharacterMeshSelection(
+            Request.MeshSelection, MeshSelectionError))
+    {
+        return Fail(MeshSelectionError);
+    }
     const bool HasAuthoring =
         !Request.SourceDefinitionFormat.empty() ||
         !Request.SourceDefinitionSha256.empty() ||
@@ -1828,6 +1967,14 @@ ProfilePackResult WriteCharacterProfilePackage(
              {"alignmentRetargeterJson",
               ResourceJson(AlignmentEntry)},
          }}};
+    if (Request.MeshSelection.Declared)
+    {
+        ProfileJson["meshSelection"] = {
+            {"schema", CharacterMeshSelectionSchema},
+            {"schemaVersion", 1},
+            {"activeLod", Request.MeshSelection.ActiveLod},
+            {"meshNodePaths", Request.MeshSelection.MeshNodePaths}};
+    }
     if (HasAuthoring)
     {
         ProfileJson["authoring"] = {

@@ -8,7 +8,15 @@
     "canonicalProfileId": "ue5_manny",
     "restPoseKind": "t_pose",
     "sourceEnabled": true,
-    "targetEnabled": true
+    "targetEnabled": true,
+    "meshSelection": {
+      "schema": "skrtg.character_mesh_selection.v1",
+      "schemaVersion": 1,
+      "activeLod": 0,
+      "meshNodePaths": [
+        "CharacterRoot/Body_LOD0"
+      ]
+    }
   },
   "inputs": {
     "restFbx": "private/example_character_rest.fbx",

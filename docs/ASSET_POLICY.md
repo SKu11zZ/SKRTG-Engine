@@ -11,8 +11,14 @@ It does not store:
 - exported IK Rig, IK Retargeter, or animation Golden JSON;
 - SKRV review packages;
 - `.skrtgprofile` character packages and their installed contents;
-- screenshots, videos, audit captures, or sample output;
+- raw screenshots, videos, audit captures, or sample output;
 - compiled executables, SDK binaries, or redistributable archives.
+
+A small, explicitly approved set of sanitized application captures may be
+tracked under `docs/` as documentation. A documentation capture must not show
+private filesystem paths, account identifiers, unpublished configuration, or
+embed a redistributable source asset. This exception does not permit raw
+capture sets, animation/character files, SKRV packages, or compiled binaries.
 
 Private data belongs in a directory outside the repository and is supplied
 through `SKRTG_RETARGET_ASSET_CATALOG_DIR` at configure time. The catalog and

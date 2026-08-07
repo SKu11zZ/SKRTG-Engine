@@ -2948,6 +2948,9 @@ UEIKJsonRetargetResult GenerateUEIKJsonRetargetReview(
     Review.OperationStackCandidateAdopted = false;
     Review.NormalizeFbxToUEJsonSpace = true;
     Review.AllowSharedSourceMeshFallbackForMeshlessClips = true;
+    Review.SourceMeshSelection = Options.SourceMeshSelection;
+    Review.TargetMeshSelection = Options.TargetMeshSelection;
+    Review.RequireExplicitMeshSelectionForMultipleMeshes = true;
     Review.SourceBones = BuildReviewBones(
         Route.SourceRig.Bones,
         SourceDisplayPaths, SourceIkIndices,

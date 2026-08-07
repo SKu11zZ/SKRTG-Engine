@@ -17,12 +17,27 @@ inline constexpr std::uint64_t MaximumDefinitionJsonBytes =
     16ULL * 1024ULL * 1024ULL;
 inline constexpr std::size_t MaximumProfileIdBytes = 128;
 inline constexpr std::size_t MaximumProfileVersionBytes = 64;
+inline constexpr std::size_t MaximumProfileMeshNodePaths = 64;
+inline constexpr std::size_t MaximumProfileMeshNodePathBytes = 4096;
+inline constexpr const char* CharacterMeshSelectionSchema =
+    "skrtg.character_mesh_selection.v1";
 
 struct ProfileResource
 {
     std::filesystem::path RelativePath;
     std::uint64_t ByteCount = 0;
     std::string Sha256;
+};
+
+// A hash-bound, exact FBX scene-node selection used only for runtime mesh
+// presentation. It never changes the skeleton, rest pose, chain mapping, or
+// solver. Declared=false preserves legacy single-mesh profiles; a runtime may
+// require an explicit declaration when an FBX contains multiple Mesh nodes.
+struct CharacterMeshSelectionDescriptor
+{
+    bool Declared = false;
+    int ActiveLod = -1;
+    std::vector<std::string> MeshNodePaths;
 };
 
 struct CharacterProfileDescriptor
@@ -43,6 +58,7 @@ struct CharacterProfileDescriptor
     std::string RestPoseKind;
     bool SourceEnabled = true;
     bool TargetEnabled = true;
+    CharacterMeshSelectionDescriptor MeshSelection;
     ProfileResource ProfileJson;
     ProfileResource RestFbx;
     ProfileResource IkRigJson;
@@ -77,6 +93,7 @@ struct ProfilePackRequest
     std::string RestPoseKind;
     bool SourceEnabled = true;
     bool TargetEnabled = true;
+    CharacterMeshSelectionDescriptor MeshSelection;
 };
 
 struct ProfilePackResult
@@ -134,6 +151,10 @@ struct ProfileDeleteResult
 bool IsCharacterProfileId(const std::string& Value);
 
 bool IsCharacterProfileVersion(const std::string& Value);
+
+bool ValidateCharacterMeshSelection(
+    const CharacterMeshSelectionDescriptor& Value,
+    std::string& OutError);
 
 int CompareCharacterProfileVersions(
     const std::string& Left,

@@ -1620,7 +1620,8 @@ bool ReadCharacterProfileCreateRequest(
     if (!HasOnlyKeys(
             Profile,
             {"id", "version", "displayName", "canonicalProfileId",
-             "restPoseKind", "sourceEnabled", "targetEnabled"},
+             "restPoseKind", "sourceEnabled", "targetEnabled",
+             "meshSelection"},
             "Profile create request profile", OutError) ||
         !HasOnlyKeys(
             Inputs,
@@ -1643,6 +1644,51 @@ bool ReadCharacterProfileCreateRequest(
     OutRequest.RestPoseKind = Profile.value("restPoseKind", "unknown");
     OutRequest.SourceEnabled = Profile.value("sourceEnabled", true);
     OutRequest.TargetEnabled = Profile.value("targetEnabled", true);
+    if (Profile.contains("meshSelection"))
+    {
+        const Json& Selection = Profile.at("meshSelection");
+        if (!HasOnlyKeys(
+                Selection,
+                {"schema", "schemaVersion", "activeLod",
+                 "meshNodePaths"},
+                "Profile create request Mesh selection", OutError) ||
+            Selection.value("schema", "") !=
+                CharacterMeshSelectionSchema ||
+            !Selection.contains("schemaVersion") ||
+            !Selection.at("schemaVersion").is_number_integer() ||
+            Selection.at("schemaVersion").get<int>() != 1 ||
+            !Selection.contains("activeLod") ||
+            !Selection.at("activeLod").is_number_integer() ||
+            !Selection.contains("meshNodePaths") ||
+            !Selection.at("meshNodePaths").is_array())
+        {
+            if (OutError.empty())
+            {
+                OutError =
+                    "unsupported or incomplete profile Mesh selection";
+            }
+            return false;
+        }
+        OutRequest.MeshSelection.Declared = true;
+        OutRequest.MeshSelection.ActiveLod =
+            Selection.at("activeLod").get<int>();
+        for (const Json& Path : Selection.at("meshNodePaths"))
+        {
+            if (!Path.is_string())
+            {
+                OutError =
+                    "profile Mesh selection paths must be strings";
+                return false;
+            }
+            OutRequest.MeshSelection.MeshNodePaths.push_back(
+                Path.get<std::string>());
+        }
+        if (!ValidateCharacterMeshSelection(
+                OutRequest.MeshSelection, OutError))
+        {
+            return false;
+        }
+    }
     const std::string RestFbxText = Inputs.value("restFbx", "");
     const std::string DefinitionText = Inputs.value("definition", "");
     const std::string AlignmentText =
@@ -1740,6 +1786,7 @@ CharacterProfileCreateResult CreateCharacterProfile(
     Pack.AlignmentRetargeterJson = Request.AlignmentRetargeterJson;
     Pack.SourceEnabled = Request.SourceEnabled;
     Pack.TargetEnabled = Request.TargetEnabled;
+    Pack.MeshSelection = Request.MeshSelection;
     Pack.SourceDefinitionFormat = Definition.Definition.SourceFormat;
     Pack.SourceDefinitionSha256 = Definition.Definition.InputSha256;
     Pack.DefinitionImporter = Definition.Definition.AdapterId;

@@ -413,6 +413,12 @@ bool ResolveBoundSkeleton(
         Descriptor.AlignmentRetargeterJson.Sha256;
     Out.SourceEnabled = Descriptor.SourceEnabled;
     Out.TargetEnabled = Descriptor.TargetEnabled;
+    Out.MeshSelection.Declared =
+        Descriptor.MeshSelection.Declared;
+    Out.MeshSelection.ActiveLod =
+        Descriptor.MeshSelection.ActiveLod;
+    Out.MeshSelection.MeshNodePaths =
+        Descriptor.MeshSelection.MeshNodePaths;
     return true;
 }
 
@@ -1734,6 +1740,8 @@ static RetargetBridgePreflight PreflightRetargetBridgeImpl(
                 Target, Result.Errors, Cache);
             if (AnimationValid && SourceValid && TargetValid)
             {
+                Result.SourceMeshSelection = Source.MeshSelection;
+                Result.TargetMeshSelection = Target.MeshSelection;
                 if (Animation->SourceSkeletonSignatureSha256 !=
                     Source.SkeletonSignatureSha256)
                 {
@@ -2176,6 +2184,27 @@ std::vector<std::string> BuildUEIKJsonRetargeterArguments(
         "--foundation-export-fbx",
         FoundationExportFileName(Request),
         "--export-fbx", ExportFileName(Request)};
+    const auto AppendMeshSelection =
+        [&](const char* ActiveLodArgument,
+            const char* NodePathArgument,
+            const RetargetBridgeMeshSelection& Selection)
+        {
+            if (!Selection.Declared) return;
+            Arguments.emplace_back(ActiveLodArgument);
+            Arguments.emplace_back(
+                std::to_string(Selection.ActiveLod));
+            for (const std::string& Path : Selection.MeshNodePaths)
+            {
+                Arguments.emplace_back(NodePathArgument);
+                Arguments.emplace_back(Path);
+            }
+        };
+    AppendMeshSelection(
+        "--source-mesh-active-lod", "--source-mesh-node-path",
+        Preflight.SourceMeshSelection);
+    AppendMeshSelection(
+        "--target-mesh-active-lod", "--target-mesh-node-path",
+        Preflight.TargetMeshSelection);
     if (Request.SourceFbxImportMode ==
         RetargetBridgeSourceFbxImportMode::UE58ExactGoldenV1)
     {

@@ -3,12 +3,15 @@
 This repository is source, tests, schemas, and documentation. Keep character
 FBX, animation FBX, Unreal projects/assets, exported production definitions,
 Golden data, `.skrtgprofile`, SKRV output, binaries, and release archives out
-of Git.
+of Git. A user-approved, path-sanitized application capture under `docs/` is
+the only image exception; raw capture sets and their source assets stay out.
 
 ## Start here
 
 1. Read `README.md`, `docs/PROJECT_LAYOUT.md`, and the contract document for
    the subsystem being changed.
+   Work on Mixamo Y Bot, UE5 Manny, MetaHuman, or UE-compatible SMPL-X pose
+   normalization must also read `docs/TPOSE_REFERENCE_V1.md`.
 2. Use `skrtg capabilities --json` to discover the installed command surface.
 3. Use `skrtg doctor --json` before a runtime job.
 4. Validate before run: `profile probe`, `batch validate`, or

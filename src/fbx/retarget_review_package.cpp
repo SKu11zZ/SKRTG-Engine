@@ -738,6 +738,8 @@ bool ExtractMeshPackage(
     FbxManager* Manager,
     const std::vector<RetargetReviewBone>& SkeletonBones,
     const std::string& Label,
+    const RetargetReviewMeshSelection& MeshSelection,
+    bool RequireExplicitMeshSelectionForMultipleMeshes,
     bool RequireAllSkeletonPaths,
     bool ReflectNativeFbxYIntoUEJson,
     bool AllowUniqueSkeletonBoneNameFallback,
@@ -811,6 +813,62 @@ bool ExtractMeshPackage(
     if (MeshNodes.empty())
     {
         OutError = Label + ": no FBX Mesh nodes were found";
+        return false;
+    }
+    const bool HasActiveLod = MeshSelection.ActiveLod >= 0;
+    const bool HasSelectedPaths =
+        !MeshSelection.MeshNodePaths.empty();
+    if (HasActiveLod != HasSelectedPaths ||
+        MeshSelection.ActiveLod > 255 ||
+        MeshSelection.MeshNodePaths.size() > 64)
+    {
+        OutError = Label +
+            ": Mesh selection requires one active LOD and 1 through 64 exact node paths";
+        return false;
+    }
+    if (HasSelectedPaths)
+    {
+        std::vector<FbxNode*> Selected;
+        Selected.reserve(MeshSelection.MeshNodePaths.size());
+        std::set<FbxNode*> Unique;
+        for (const std::string& Path : MeshSelection.MeshNodePaths)
+        {
+            const auto Found = ByPath.find(Path);
+            if (Found == ByPath.end() ||
+                Found->second == nullptr ||
+                Found->second->GetMesh() == nullptr)
+            {
+                OutError = Label +
+                    ": selected FBX Mesh node path is absent: " + Path;
+                return false;
+            }
+            if (!Unique.insert(Found->second).second)
+            {
+                OutError = Label +
+                    ": selected FBX Mesh node paths are not unique";
+                return false;
+            }
+            Selected.push_back(Found->second);
+        }
+        MeshNodes = std::move(Selected);
+    }
+    else if (RequireExplicitMeshSelectionForMultipleMeshes &&
+             MeshNodes.size() > 1)
+    {
+        std::ostringstream Inventory;
+        for (std::size_t Index = 0;
+             Index < MeshNodes.size() && Index < 16; ++Index)
+        {
+            const auto Found = Paths.find(MeshNodes[Index]);
+            if (Index) Inventory << ", ";
+            Inventory << (Found != Paths.end()
+                ? Found->second
+                : std::string("<unknown>"));
+        }
+        if (MeshNodes.size() > 16) Inventory << ", ...";
+        OutError = Label +
+            ": FBX contains multiple Mesh nodes; an exact Character Profile Mesh selection is required. Available paths: " +
+            Inventory.str();
         return false;
     }
     Out.Label = Label;
@@ -3653,7 +3711,10 @@ RetargetReviewPackageResult GenerateRetargetReviewPackage(
             if (!ExtractMeshPackage(
                     FallbackScene.Scene, FallbackScene.Manager,
                     Options.SourceBones,
-                    "source_mesh_fallback", false,
+                    "source_mesh_fallback",
+                    Options.SourceMeshSelection,
+                    Options.RequireExplicitMeshSelectionForMultipleMeshes,
+                    false,
                     Options.NormalizeFbxToUEJsonSpace,
                     Options.NormalizeFbxToUEJsonSpace,
                     SourceMesh, Error))
@@ -3674,6 +3735,8 @@ RetargetReviewPackageResult GenerateRetargetReviewPackage(
                     ? "source_mesh_ue_export_provider"
                     : "source_animation_" +
                         Options.Clips[Index].Id,
+                Options.SourceMeshSelection,
+                Options.RequireExplicitMeshSelectionForMultipleMeshes,
                 false, Options.NormalizeFbxToUEJsonSpace,
                 UseExplicitUEJsonMeshProvider,
                 SourceMesh, Error))
@@ -3701,7 +3764,10 @@ RetargetReviewPackageResult GenerateRetargetReviewPackage(
     if (!ExtractMeshPackage(
             TargetExtractionScene.Scene,
             TargetExtractionScene.Manager,
-            Options.TargetBones, "target_tpose", true,
+            Options.TargetBones, "target_tpose",
+            Options.TargetMeshSelection,
+            Options.RequireExplicitMeshSelectionForMultipleMeshes,
+            true,
             Options.NormalizeFbxToUEJsonSpace,
             false,
             TargetMesh, Error))

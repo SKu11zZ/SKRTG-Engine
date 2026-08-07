@@ -43,6 +43,8 @@
 *.gif
 *.mp4
 *.mov
+!docs/skrtg-viewer-demo.png
+!docs/skrtg-new-animation-nine-grid.png
 /Audit/
 /Samples/
 /Exports/

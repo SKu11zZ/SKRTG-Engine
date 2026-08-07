@@ -153,6 +153,10 @@ Profile::ProfilePackResult PackProfile(
     Request.RestFbx = Rest;
     Request.IkRigJson = Rig;
     Request.AlignmentRetargeterJson = Alignment;
+    Request.MeshSelection.Declared = true;
+    Request.MeshSelection.ActiveLod = 0;
+    Request.MeshSelection.MeshNodePaths = {
+        Id + "/Body_LOD0"};
     return Profile::WriteCharacterProfilePackage(Request);
 }
 
@@ -390,6 +394,25 @@ void TestProfileBoundBridge()
     Check(Preflight.TargetProfilePackageSha256 ==
               Binding.TargetProfilePackageSha256,
           "target profile package hash should be audited");
+    Check(Preflight.SourceMeshSelection.Declared &&
+              Preflight.SourceMeshSelection.MeshNodePaths ==
+                  SourceInstall.Installed.Profile.MeshSelection.MeshNodePaths &&
+              Preflight.TargetMeshSelection.Declared &&
+              Preflight.TargetMeshSelection.MeshNodePaths ==
+                  TargetInstall.Installed.Profile.MeshSelection.MeshNodePaths,
+          "profile Mesh selections should cross the audited preflight boundary");
+    const std::vector<std::string> WorkerArguments =
+        BuildUEIKJsonRetargeterArguments(
+            Request, Preflight, Root.Path / "worker-output");
+    Check(std::find(
+              WorkerArguments.begin(), WorkerArguments.end(),
+              SourceInstall.Installed.Profile.MeshSelection
+                  .MeshNodePaths.front()) != WorkerArguments.end() &&
+              std::find(
+                  WorkerArguments.begin(), WorkerArguments.end(),
+                  TargetInstall.Installed.Profile.MeshSelection
+                      .MeshNodePaths.front()) != WorkerArguments.end(),
+          "Worker arguments should carry exact source and target Mesh paths");
 
     const std::filesystem::path RequestFile =
         Root.Path / "request.json";

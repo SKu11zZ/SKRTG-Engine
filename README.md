@@ -10,7 +10,7 @@
 <p align="center">
   <a href="#read-chinese"><img alt="中文" src="https://img.shields.io/badge/中文-阅读中文版-18181B?style=for-the-badge"></a>
   <a href="#read-english"><img alt="English" src="https://img.shields.io/badge/English-Read_in_English-18181B?style=for-the-badge"></a>
-  <a href="#current-build"><img alt="Current build" src="https://img.shields.io/badge/Current_build-Four_Profile_Matrix-D6A900?style=for-the-badge"></a>
+  <a href="#current-build"><img alt="Current validation" src="https://img.shields.io/badge/Current_validation-27_jobs-D6A900?style=for-the-badge"></a>
   <a href="#license"><img alt="Apache License 2.0" src="https://img.shields.io/badge/License-Apache--2.0-18181B?style=for-the-badge"></a>
 </p>
 
@@ -23,6 +23,12 @@
 </p>
 
 <p align="center"><sub>实机画面 / Actual application capture — Mixamo Fist Fight A → UE5 Manny，帧 70 / 140；Original、FK、Foundation 与 Final 四视图同步。</sub></p>
+
+<p align="center">
+  <img src="docs/skrtg-new-animation-nine-grid.png" width="100%" alt="Nine Native Viewer middle-frame reviews: three Mixamo to MetaHuman clips, three UE5 Manny to SMPL-X clips, and three SMPL-X to UE5 Manny clips">
+</p>
+
+<p align="center"><sub>扩展动作回归 / Expanded motion regression — Mixamo → MetaHuman、UE5 Manny → SMPL-X、SMPL-X → UE5 Manny，各 3 段；9 / 9、共 698 帧。图中是中间帧审阅证据，私有角色与动画资产不随仓库分发。</sub></p>
 
 ---
 
@@ -42,23 +48,25 @@ SKRTG 关心的不是配置由哪个软件生成，而是信息是否明确：�
 
 | 项目 | 当前状态 |
 | --- | --- |
-| 角色 Profile | **通过**：Mixamo Y Bot、MetaHuman、UE5 Manny、SMPL |
+| 角色 Profile | **通过**：Mixamo Y Bot、MetaHuman、UE5 Manny、UE-compatible SMPL-X |
 | 非同源有向路线 | **12 / 12** 通过静态预检 |
-| 动态任务 | **18 / 18** 完成并通过结果校验 |
-| 正式源动画 | **4 段**：2 段 Mixamo、2 段 Manny |
-| MetaHuman / SMPL 作为源 | **黄灯**：已走通 round-trip probe，仍缺独立创作的源动画语料 |
+| 基础矩阵动态任务 | **18 / 18** 完成并通过结果校验 |
+| 新动作回归 | **9 / 9**，覆盖 3 条路线、698 帧 |
+| 私有验证源动画 | **13 段**：5 段 Mixamo、5 段 Manny、3 段 SMPL-X |
+| 源角色覆盖 | **SMPL-X 已有独立 ACCAD 动作**；MetaHuman 仍为 round-trip probe 黄灯 |
 | 路线采纳状态 | `candidateRouteSelected=false` / `candidateRouteAdopted=false` |
 | Vicon | 本阶段暂不处理 |
 
-这里的 18 个动态任务不是同一种证据：其中 12 个使用用户提供的 Mixamo / Manny 原始动画；另外 6 个是明确标记的 UE 5.8 round-trip probe，用来验证 MetaHuman / SMPL 的反向运行链。Probe 能证明链路可运行，但不能替代真正的 MetaHuman / SMPL 源动画质量验收。
+这里的 27 个动态任务分成两组证据。基础矩阵的 18 个任务包括 12 个 Mixamo / Manny 原始动画任务和 6 个 UE 5.8 round-trip probe；新增的 9 个回归任务使用 Mixamo、Manny 和独立 SMPL-X/ACCAD 动作，专门检查跑步、落地、蹲伏、潜行、起身、死亡和持枪姿势。Probe 能证明链路可运行，但不能替代独立源动画质量验收。
 
-完整记录见 [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md)。
+完整记录见 [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) 与 [New Animation Regression V1](docs/NEW_ANIMATION_REGRESSION_V1.md)。
 
 ### 现在可以做什么
 
 - 用统一的 `skrtg` CLI 完成能力发现、环境检查、Profile 导入/检查、Batch、Bridge、SKRV 验证和 Agent 调试；`--json` 提供稳定机器协议。
 - 通过格式适配器把 UE IK Rig 导出、SKRTG Character Definition JSON/XML，以及来自 MotionBuilder、3ds Max 等 DCC 的骨骼链导出规范化为同一个角色定义；也可以只读探测 Rest FBX，并明确列出尚缺的信息。
 - 用 `.skrtgprofile v1` 把一个角色的 Rest FBX、规范化/编译后的 Rig 定义、显式对齐数据、来源记录和完整性清单放进同一个可验证角色包。
+- 在 Profile 中用精确 FBX 节点路径声明活动 Mesh / LOD；多 Mesh 文件缺少声明时 fail-closed，不按后缀、面数或节点顺序猜测。
 - 在 Viewer 中安装、检查、切换和移除角色 Profile；同一角色可以安装多个版本，默认启用最高 SemVer 版本。
 - 在批处理界面选择源角色和目标角色。动画列表只显示属于当前源骨骼、且 skeleton signature 完全匹配的动画。
 - 一次选择多段动画，预检全部通过后再开始；运行时固定一个 Worker，处理完一段才进入下一段。
@@ -116,7 +124,7 @@ cmake -S . -B build -A x64 `
 - 当前只正式验证 Windows x64。
 - Vicon 尚未进入这一阶段。
 - MetaHuman 手指仍保留现有 Coordinate Basis Fix V1 基线；已知的手指塌陷问题还没有被新算法解决。
-- MetaHuman / SMPL 作为源角色时，目前只有 round-trip probe，没有独立源动画语料。
+- SMPL-X 已通过 3 段独立 ACCAD 动作的源侧回归，但 NPZ 标准化仍是外部预处理，不是仓库内置导入器；MetaHuman 作为源仍只有 round-trip probe。
 - 不自动臆测骨骼链、Root/Pelvis 或源目标映射，也不在缺少必要语义时静默回退。
 - 材质、贴图、Morph Target、Blend Shape fidelity、跨平台与便携运行时尚未进入发布门槛。
 - Viewer 只读取 SKRV，不会在显示层重新计算或“美化”算法差异。
@@ -157,23 +165,25 @@ The project is deliberately strict about evidence. When configuration is incompl
 
 | Area | Current status |
 | --- | --- |
-| Character profiles | **Passed**: Mixamo Y Bot, MetaHuman, UE5 Manny, and SMPL |
+| Character profiles | **Passed**: Mixamo Y Bot, MetaHuman, UE5 Manny, and UE-compatible SMPL-X |
 | Directed non-identity routes | **12 / 12** passed static preflight |
-| Dynamic jobs | **18 / 18** completed and verified |
-| Production source clips | **4 clips**: two Mixamo and two Manny motions |
-| MetaHuman / SMPL as sources | **Caution**: round-trip probes pass, but independently authored source clips are still missing |
+| Base-matrix dynamic jobs | **18 / 18** completed and verified |
+| New-motion regression | **9 / 9**, covering three routes and 698 frames |
+| Private validation clips | **13 clips**: five Mixamo, five Manny, and three SMPL-X motions |
+| Source-side coverage | **Independent SMPL-X/ACCAD motion passed**; MetaHuman remains a round-trip-probe caution |
 | Route adoption | `candidateRouteSelected=false` / `candidateRouteAdopted=false` |
 | Vicon | Deferred from this stage |
 
-The 18 dynamic jobs do not all carry the same weight. Twelve use the original Mixamo and Manny clips supplied for the project. The remaining six are clearly labeled UE 5.8 round-trip probes for the MetaHuman and SMPL reverse paths. Those probes show that the runtime path works; they are not a substitute for quality validation with independently authored MetaHuman or SMPL motion.
+The 27 recorded dynamic jobs form two evidence sets. The 18-job base matrix contains twelve original Mixamo/Manny jobs and six UE 5.8 round-trip probes. The additional nine-job regression uses Mixamo, Manny, and independent SMPL-X/ACCAD motion to exercise running, landing, crouching, sneaking, standing, death, and rifle-hand poses. A probe shows that a route runs; it is not a substitute for independently authored source-motion evidence.
 
-See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) for the validation record.
+See [Non-Vicon Matrix V1](docs/NON_VICON_MATRIX_V1.md) and [New Animation Regression V1](docs/NEW_ANIMATION_REGRESSION_V1.md) for the validation records.
 
 ### What works today
 
 - The unified `skrtg` CLI covers capability discovery, environment checks, Profile import/inspection, Batch, Bridge, SKRV verification, and agent diagnostics. `--json` provides a stable machine contract.
 - Format adapters normalize UE IK Rig exports, SKRTG Character Definition JSON/XML, and skeleton-chain exports from tools such as MotionBuilder or 3ds Max into one character model. A Rest FBX can also be probed read-only, with missing semantics reported explicitly.
 - `.skrtgprofile v1` packages a character's rest FBX, normalized/compiled rig definition, explicit alignment data, provenance, metadata, and integrity inventory into one verifiable unit.
+- A Profile can declare its active Mesh / LOD with exact FBX node paths. Multi-Mesh input without that declaration fails closed instead of guessing from suffixes, polygon counts, or node order.
 - The Viewer can inspect, install, switch, and remove profiles. Multiple versions can coexist, with the highest SemVer version active by default.
 - The batch UI selects source and target profiles, then shows only animations owned by the selected source skeleton with an exact matching skeleton signature.
 - Multiple clips can be selected at once. The complete set is preflighted first, then processed serially with one Worker.
@@ -231,7 +241,7 @@ cmake -S . -B build -A x64 `
 - Windows x64 is the only formally validated platform today.
 - Vicon is not part of this stage.
 - MetaHuman fingers remain on the current Coordinate Basis Fix V1 baseline; the known finger-collapse issue has not been solved by a newly adopted algorithm.
-- MetaHuman and SMPL have round-trip source probes, not independently authored source-motion coverage.
+- SMPL-X now has three independent ACCAD source-motion regression clips, but NPZ standardization remains external preprocessing rather than a built-in importer. MetaHuman still has round-trip probes only.
 - There is no guessed chain, Root/Pelvis, or source/target mapping, and no silent fallback when required semantics are missing.
 - Materials, textures, morph targets, Blend Shape fidelity, cross-platform builds, and a portable runtime are not release gates yet.
 - The Viewer reads SKRV results; it does not recompute or exaggerate algorithmic differences in the presentation layer.
@@ -243,6 +253,7 @@ This public repository contains source code, tests, and documentation only. Char
 
 - [Unified CLI and agent contract](docs/CLI.md)
 - [Character Profile authoring v2](docs/CHARACTER_PROFILE_AUTHORING_V2.md)
+- [Standard T-Pose reference v1](docs/TPOSE_REFERENCE_V1.md)
 - [Project layout and dependency direction](docs/PROJECT_LAYOUT.md)
 - [Contributing](CONTRIBUTING.md)
 - [Agent working contract](AGENTS.md)
@@ -253,6 +264,7 @@ This public repository contains source code, tests, and documentation only. Char
 - [Performance and timing evidence](docs/PERFORMANCE.md)
 - [Asset policy](docs/ASSET_POLICY.md)
 - [Four-profile matrix validation](docs/NON_VICON_MATRIX_V1.md)
+- [New animation regression v1](docs/NEW_ANIMATION_REGRESSION_V1.md)
 
 <p align="right"><a href="#top">Back to top ↑</a></p>
 

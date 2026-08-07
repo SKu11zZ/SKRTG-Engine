@@ -22,6 +22,7 @@ struct RetargetSkeletonAsset
     std::string AlignmentRetargeterJsonSha256;
     bool SourceEnabled = true;
     bool TargetEnabled = true;
+    RetargetBridgeMeshSelection MeshSelection;
 };
 
 struct RetargetAnimationAsset

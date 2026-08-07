@@ -51,6 +51,23 @@ does not infer T-pose versus A-pose from a screenshot or shoulder angle. Pose
 alignment remains explicit retarget data, which is especially important for
 T-pose Mixamo/SMPL characters and A-pose MetaHuman characters.
 
+The accepted shared visual standard, character-specific exceptions, LOD review
+rule, and rollback requirements for Mixamo Y Bot, UE5 Manny, MetaHuman, and
+UE-compatible SMPL-X are defined in
+[`TPOSE_REFERENCE_V1.md`](TPOSE_REFERENCE_V1.md). An accepted alignment T-pose
+does not silently change the declared kind or transforms of the original Rest
+Pose.
+
+Mesh presentation is independent from pose alignment. When a Rest FBX stores
+several LODs or several intentional Mesh parts, the profile create request may
+declare `profile.meshSelection` using
+[`skrtg.character_mesh_selection.v1`](../schemas/skrtg.character_mesh_selection.v1.schema.json).
+The author supplies an active LOD index plus the exact FBX scene paths that
+belong to that runtime LOD. SKRTG does not infer LOD membership from `_LOD0`,
+node order, polygon count, or visibility flags. If a multi-Mesh UE IK JSON job
+omits this declaration, the Worker fails with a bounded inventory of valid
+paths so the request can be repaired explicitly.
+
 ## Runtime completeness
 
 A definition can be inspected and normalized when it has a valid skeleton.
@@ -74,6 +91,11 @@ The authoritative schema is
 [`schemas/skrtg.character_definition.v1.schema.json`](../schemas/skrtg.character_definition.v1.schema.json).
 A small example is in
 [`examples/character-definition.example.json`](../examples/character-definition.example.json).
+
+The profile creation request is defined by
+[`schemas/skrtg.profile_create_request.v1.schema.json`](../schemas/skrtg.profile_create_request.v1.schema.json),
+with an asset-free example in
+[`examples/profile-create.example.json`](../examples/profile-create.example.json).
 
 Bone `model` transforms are optional input. The importer deterministically
 rebuilds them from local transforms and the parent order when omitted. A

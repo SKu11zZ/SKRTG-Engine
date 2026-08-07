@@ -102,6 +102,12 @@ struct RetargetReviewClipView
     std::vector<RetargetReviewFrameView> Frames;
 };
 
+struct RetargetReviewMeshSelection
+{
+    int ActiveLod = -1;
+    std::vector<std::string> MeshNodePaths;
+};
+
 struct RetargetReviewPackageOptions
 {
     std::string ContractKind = "foundation_v1";
@@ -146,6 +152,12 @@ struct RetargetReviewPackageOptions
     // Opt-in explicit UE JSON <-> native FBX basis adapter for versioned UE
     // JSON routes. Manual FBX routes retain their declared input basis.
     bool NormalizeFbxToUEJsonSpace = false;
+    // Exact, profile-authored FBX scene paths. Review payloads include only
+    // these Mesh nodes; source and exported FBX files retain their complete
+    // LOD inventory.
+    RetargetReviewMeshSelection SourceMeshSelection;
+    RetargetReviewMeshSelection TargetMeshSelection;
+    bool RequireExplicitMeshSelectionForMultipleMeshes = false;
 };
 
 struct RetargetReviewPackageArtifact

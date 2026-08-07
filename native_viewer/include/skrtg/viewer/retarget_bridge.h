@@ -39,6 +39,13 @@ struct RetargetBridgeTools
     std::filesystem::path DefaultSourceRestFbx;
 };
 
+struct RetargetBridgeMeshSelection
+{
+    bool Declared = false;
+    int ActiveLod = -1;
+    std::vector<std::string> MeshNodePaths;
+};
+
 struct RetargetBridgeAssetBinding
 {
     bool Required = false;
@@ -115,6 +122,8 @@ struct RetargetBridgePreflight
     std::string TargetAlignmentRetargeterJsonSha256;
     std::string SourceAnimationGoldenJsonSha256;
     std::string OperationStackJsonSha256;
+    RetargetBridgeMeshSelection SourceMeshSelection;
+    RetargetBridgeMeshSelection TargetMeshSelection;
     std::vector<std::string> Errors;
     std::vector<std::string> Warnings;
 };

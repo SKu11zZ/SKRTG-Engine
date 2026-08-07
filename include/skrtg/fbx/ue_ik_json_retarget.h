@@ -41,6 +41,8 @@ struct UEIKJsonRetargetOptions
     std::string SourceAnimationGoldenJsonExpectedSha256;
     std::filesystem::path TargetRestFbxPath;
     std::string TargetRestFbxExpectedSha256;
+    RetargetReviewMeshSelection SourceMeshSelection;
+    RetargetReviewMeshSelection TargetMeshSelection;
 
     // Optional, hash-bound candidate Operation System v2 program. Absence
     // means exact Foundation passthrough. Loading never selects or adopts an
